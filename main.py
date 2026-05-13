@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from .storage import ScheduleStorage
 
 PLUGIN_NAME = "astrbot_plugin_schedule_tracker"
 RECENT_FILE_WINDOW = timedelta(minutes=10)
+RENDER_SIZE_RE = re.compile(r'data-render-width="(\d+)".*?data-render-height="(\d+)"', re.S)
 
 
 @star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.0")
@@ -134,14 +136,34 @@ class ScheduleTrackerPlugin(star.Star):
                 return str(component.qq), component.name or str(component.qq)
         return None
 
+    def _render_options(self, html: str) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "type": "png",
+            "animations": "disabled",
+            "caret": "hide",
+        }
+        match = RENDER_SIZE_RE.search(html)
+        if match:
+            width = int(match.group(1))
+            height = int(match.group(2))
+            options["clip"] = {
+                "x": 0,
+                "y": 0,
+                "width": width,
+                "height": height,
+            }
+            return options
+        options["full_page"] = True
+        return options
+
+    def _avatar_url(self, user_id: str) -> str:
+        return f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=100"
+
     async def _render_image(self, html: str) -> str:
         return await self.html_render(
             html,
             {},
-            options={
-                "type": "png",
-                "full_page": True,
-            },
+            options=self._render_options(html),
         )
 
     async def _reply_html(
@@ -232,7 +254,7 @@ class ScheduleTrackerPlugin(star.Star):
         now = datetime.now(self.timezone)
         try:
             status = self.service.current_status(schedule, now)
-            await self._reply_html(event, status_html(status, now))
+            await self._reply_html(event, status_html(status, now, avatar_url=self._avatar_url(target_id)))
         except (CalendarDependencyError, CalendarParseError) as exc:
             self._reply_text(event, str(exc))
 
@@ -252,7 +274,7 @@ class ScheduleTrackerPlugin(star.Star):
             return
         try:
             week_start, occurrences = self.service.week_schedule(member, datetime.now(self.timezone))
-            await self._reply_html(event, week_html(member, week_start, occurrences))
+            await self._reply_html(event, week_html(member, week_start, occurrences, avatar_url=self._avatar_url(target_id)))
         except (CalendarDependencyError, CalendarParseError) as exc:
             self._reply_text(event, str(exc))
 
