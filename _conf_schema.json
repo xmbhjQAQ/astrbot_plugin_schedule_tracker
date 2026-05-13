@@ -1,0 +1,14 @@
+{
+  "timezone": {
+    "description": "课表与日报使用的时区",
+    "type": "string",
+    "default": "Asia/Shanghai",
+    "hint": "例如 Asia/Shanghai"
+  },
+  "daily_report_time": {
+    "description": "每日课时统计发送时间",
+    "type": "string",
+    "default": "22:30",
+    "hint": "24 小时制 HH:MM，例如 22:30"
+  }
+}
