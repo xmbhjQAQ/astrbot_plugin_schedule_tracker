@@ -27,6 +27,7 @@ from .storage import ScheduleStorage
 
 PLUGIN_NAME = "astrbot_plugin_schedule_tracker"
 RECENT_FILE_WINDOW = timedelta(minutes=10)
+IMAGE_WIDTH = 880
 
 
 @star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.0")
@@ -46,6 +47,7 @@ class ScheduleTrackerPlugin(star.Star):
         self.parser = IcsScheduleParser(self.timezone)
         self.service = ScheduleService(self.parser, self.timezone)
         self.recent_files: dict[tuple[str, str], FileCandidate] = {}
+        self.pending_binds: dict[tuple[str, str], datetime] = {}
         self.scheduler: Any = None
         self._configure_report_job()
 
@@ -82,7 +84,8 @@ class ScheduleTrackerPlugin(star.Star):
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent) -> None:
-        self._remember_ics_files(event)
+        if await self._remember_ics_files(event):
+            return
         text = event.message_str.strip()
         if text == "绑定课表":
             await self._handle_bind(event)
@@ -93,11 +96,11 @@ class ScheduleTrackerPlugin(star.Star):
         elif text.startswith("课表隐私"):
             await self._handle_privacy(event, text)
 
-    def _remember_ics_files(self, event: AstrMessageEvent) -> None:
+    async def _remember_ics_files(self, event: AstrMessageEvent) -> bool:
         group_id = event.get_group_id()
         user_id = event.get_sender_id()
         if not group_id or not user_id:
-            return
+            return False
         for component in event.get_messages():
             if not isinstance(component, File):
                 continue
@@ -107,7 +110,7 @@ class ScheduleTrackerPlugin(star.Star):
             file_ref = component.url or getattr(component, "file_", "")
             if not file_ref:
                 continue
-            self.recent_files[(group_id, user_id)] = FileCandidate(
+            candidate = FileCandidate(
                 group_id=group_id,
                 user_id=user_id,
                 display_name=event.get_sender_name() or user_id,
@@ -115,6 +118,13 @@ class ScheduleTrackerPlugin(star.Star):
                 file_url=file_ref,
                 created_at=datetime.now(self.timezone),
             )
+            self.recent_files[(group_id, user_id)] = candidate
+            pending_at = self.pending_binds.get((group_id, user_id))
+            if pending_at and candidate.created_at - pending_at <= RECENT_FILE_WINDOW:
+                self.pending_binds.pop((group_id, user_id), None)
+                await self._bind_candidate(event, candidate, component)
+                return True
+        return False
 
     def _target_from_at(self, event: AstrMessageEvent) -> tuple[str, str] | None:
         bot_id = event.get_self_id()
@@ -123,12 +133,25 @@ class ScheduleTrackerPlugin(star.Star):
                 return str(component.qq), component.name or str(component.qq)
         return None
 
-    async def _render_image(self, html: str) -> str:
-        return await self.html_render(html, {}, options={"type": "png", "full_page": True})
+    async def _render_image(self, html: str, height: int = 520) -> str:
+        return await self.html_render(
+            html,
+            {},
+            options={
+                "type": "png",
+                "full_page": False,
+                "clip": {"x": 0, "y": 0, "width": IMAGE_WIDTH, "height": height},
+            },
+        )
 
-    async def _reply_html(self, event: AstrMessageEvent, html: str) -> None:
+    async def _reply_html(
+        self,
+        event: AstrMessageEvent,
+        html: str,
+        height: int = 420,
+    ) -> None:
         try:
-            url = await self._render_image(html)
+            url = await self._render_image(html, height)
             event.set_result(MessageEventResult().url_image(url).stop_event())
         except Exception as exc:
             logger.exception("课表图片渲染失败: %s", exc)
@@ -142,17 +165,27 @@ class ScheduleTrackerPlugin(star.Star):
         candidate = self.recent_files.get((group_id, user_id))
         now = datetime.now(self.timezone)
         if not candidate or now - candidate.created_at > RECENT_FILE_WINDOW:
+            self.pending_binds[(group_id, user_id)] = now
             await self._reply_html(
                 event,
-                message_html("绑定课表", "请先在 10 分钟内上传或转发自己的 .ics 文件。"),
+                message_html("绑定课表", "请在 10 分钟内上传或转发自己的 .ics 文件。"),
             )
             return
 
+        await self._bind_candidate(event, candidate, None)
+
+    async def _bind_candidate(
+        self,
+        event: AstrMessageEvent,
+        candidate: FileCandidate,
+        component: File | None,
+    ) -> None:
+        group_id = event.get_group_id()
+        user_id = event.get_sender_id()
+        now = datetime.now(self.timezone)
         file_path = ""
-        for component in event.get_messages():
-            if isinstance(component, File) and (component.name or "").lower().endswith(".ics"):
-                file_path = await component.get_file()
-                break
+        if component is not None:
+            file_path = await component.get_file()
         if not file_path:
             if candidate.file_url.startswith(("http://", "https://")):
                 temp_file = File(name=candidate.file_name, url=candidate.file_url)
@@ -210,7 +243,7 @@ class ScheduleTrackerPlugin(star.Star):
         now = datetime.now(self.timezone)
         try:
             status = self.service.current_status(schedule, now)
-            await self._reply_html(event, status_html(status, now))
+            await self._reply_html(event, status_html(status, now), height=520)
         except (CalendarDependencyError, CalendarParseError) as exc:
             await self._reply_html(event, message_html("在上课吗", str(exc)))
 
@@ -230,7 +263,11 @@ class ScheduleTrackerPlugin(star.Star):
             return
         try:
             week_start, occurrences = self.service.week_schedule(member, datetime.now(self.timezone))
-            await self._reply_html(event, week_html(member, week_start, occurrences))
+            await self._reply_html(
+                event,
+                week_html(member, week_start, occurrences),
+                height=660,
+            )
         except (CalendarDependencyError, CalendarParseError) as exc:
             await self._reply_html(event, message_html("看看课表", str(exc)))
 
@@ -280,7 +317,7 @@ class ScheduleTrackerPlugin(star.Star):
                 if not rows:
                     continue
                 html = report_html(public_group.group_id, datetime.now(self.timezone), rows)
-                url = await self._render_image(html)
+                url = await self._render_image(html, height=min(1200, 220 + len(rows) * 88))
                 await self.context.send_message(public_group.unified_msg_origin, MessageChain().url_image(url))
                 await asyncio.sleep(0.5)
             except Exception as exc:

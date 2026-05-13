@@ -10,6 +10,7 @@ STYLE = """
 body {
   margin: 0;
   width: 880px;
+  height: auto;
   font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
   color: #42372f;
   background: #fff7ed;
@@ -17,6 +18,7 @@ body {
 .card {
   box-sizing: border-box;
   width: 880px;
+  min-height: 320px;
   padding: 34px;
   background:
     radial-gradient(circle at 82px 74px, #ffd6e7 0 34px, transparent 35px),

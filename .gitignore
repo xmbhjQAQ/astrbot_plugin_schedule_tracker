@@ -7,3 +7,5 @@ __pycache__/
 .conda/
 data/
 *.log
+debug*.txt
+debug用的日志.txt
