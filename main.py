@@ -27,7 +27,6 @@ from .storage import ScheduleStorage
 
 PLUGIN_NAME = "astrbot_plugin_schedule_tracker"
 RECENT_FILE_WINDOW = timedelta(minutes=10)
-IMAGE_WIDTH = 880
 
 
 @star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.0")
@@ -95,6 +94,8 @@ class ScheduleTrackerPlugin(star.Star):
             await self._handle_week(event)
         elif text.startswith("课表隐私"):
             await self._handle_privacy(event, text)
+        elif text == "删除课表":
+            await self._handle_delete(event)
 
     async def _remember_ics_files(self, event: AstrMessageEvent) -> bool:
         group_id = event.get_group_id()
@@ -133,14 +134,13 @@ class ScheduleTrackerPlugin(star.Star):
                 return str(component.qq), component.name or str(component.qq)
         return None
 
-    async def _render_image(self, html: str, height: int = 520) -> str:
+    async def _render_image(self, html: str) -> str:
         return await self.html_render(
             html,
             {},
             options={
                 "type": "png",
-                "full_page": False,
-                "clip": {"x": 0, "y": 0, "width": IMAGE_WIDTH, "height": height},
+                "full_page": True,
             },
         )
 
@@ -148,10 +148,9 @@ class ScheduleTrackerPlugin(star.Star):
         self,
         event: AstrMessageEvent,
         html: str,
-        height: int = 420,
     ) -> None:
         try:
-            url = await self._render_image(html, height)
+            url = await self._render_image(html)
             event.set_result(MessageEventResult().url_image(url).stop_event())
         except Exception as exc:
             logger.exception("课表图片渲染失败: %s", exc)
@@ -243,7 +242,7 @@ class ScheduleTrackerPlugin(star.Star):
         now = datetime.now(self.timezone)
         try:
             status = self.service.current_status(schedule, now)
-            await self._reply_html(event, status_html(status, now), height=520)
+            await self._reply_html(event, status_html(status, now))
         except (CalendarDependencyError, CalendarParseError) as exc:
             await self._reply_html(event, message_html("在上课吗", str(exc)))
 
@@ -263,11 +262,7 @@ class ScheduleTrackerPlugin(star.Star):
             return
         try:
             week_start, occurrences = self.service.week_schedule(member, datetime.now(self.timezone))
-            await self._reply_html(
-                event,
-                week_html(member, week_start, occurrences),
-                height=660,
-            )
+            await self._reply_html(event, week_html(member, week_start, occurrences))
         except (CalendarDependencyError, CalendarParseError) as exc:
             await self._reply_html(event, message_html("看看课表", str(exc)))
 
@@ -298,6 +293,19 @@ class ScheduleTrackerPlugin(star.Star):
             message_html("课表隐私", f"已切换为：{privacy_label(mode)}"),
         )
 
+    async def _handle_delete(self, event: AstrMessageEvent) -> None:
+        member = self.storage.delete_schedule(
+            self.groups,
+            group_id=event.get_group_id(),
+            user_id=event.get_sender_id(),
+        )
+        self.recent_files.pop((event.get_group_id(), event.get_sender_id()), None)
+        self.pending_binds.pop((event.get_group_id(), event.get_sender_id()), None)
+        if not member:
+            await self._reply_html(event, message_html("删除课表", "你还没有绑定课表。"))
+            return
+        await self._reply_html(event, message_html("删除课表", "已删除你的课表绑定。"))
+
     async def _send_daily_reports(self) -> None:
         today = datetime.now(self.timezone).date()
         for group in self.groups.values():
@@ -317,7 +325,7 @@ class ScheduleTrackerPlugin(star.Star):
                 if not rows:
                     continue
                 html = report_html(public_group.group_id, datetime.now(self.timezone), rows)
-                url = await self._render_image(html, height=min(1200, 220 + len(rows) * 88))
+                url = await self._render_image(html)
                 await self.context.send_message(public_group.unified_msg_origin, MessageChain().url_image(url))
                 await asyncio.sleep(0.5)
             except Exception as exc:

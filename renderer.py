@@ -9,7 +9,7 @@ STYLE = """
 <style>
 body {
   margin: 0;
-  width: 880px;
+  width: 760px;
   height: auto;
   font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
   color: #42372f;
@@ -17,17 +17,16 @@ body {
 }
 .card {
   box-sizing: border-box;
-  width: 880px;
-  min-height: 320px;
-  padding: 34px;
+  width: 760px;
+  padding: 28px;
   background:
-    radial-gradient(circle at 82px 74px, #ffd6e7 0 34px, transparent 35px),
-    radial-gradient(circle at 780px 88px, #c6f6d5 0 46px, transparent 47px),
+    radial-gradient(circle at 72px 62px, #ffd6e7 0 30px, transparent 31px),
+    radial-gradient(circle at 675px 72px, #c6f6d5 0 40px, transparent 41px),
     linear-gradient(135deg, #fff8e8 0%, #eef8ff 100%);
-  border: 10px solid #ffe0ad;
+  border: 8px solid #ffe0ad;
 }
-.title { font-size: 34px; font-weight: 800; margin-bottom: 8px; }
-.subtitle { font-size: 18px; color: #7a6a5d; margin-bottom: 24px; }
+.title { font-size: 30px; font-weight: 800; margin-bottom: 8px; }
+.subtitle { font-size: 17px; color: #7a6a5d; margin-bottom: 18px; }
 .pill {
   display: inline-block;
   padding: 8px 14px;
@@ -38,36 +37,37 @@ body {
   margin-right: 8px;
 }
 .hero {
-  padding: 24px;
-  border-radius: 26px;
+  padding: 20px;
+  border-radius: 22px;
   background: #ffffffd9;
   border: 3px dashed #ffb6c8;
 }
-.status { font-size: 30px; font-weight: 800; margin-bottom: 14px; }
+.status { font-size: 24px; font-weight: 800; margin-bottom: 10px; }
 .course {
-  margin-top: 12px;
-  padding: 16px;
-  border-radius: 18px;
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 16px;
   background: #f7fbff;
   border-left: 10px solid #84c5ff;
 }
-.course-name { font-size: 24px; font-weight: 700; }
-.muted { color: #756b61; font-size: 17px; margin-top: 6px; }
-.grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+.course-name { font-size: 21px; font-weight: 700; }
+.muted { color: #756b61; font-size: 16px; margin-top: 5px; }
+.week-list { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .day {
-  min-height: 260px;
-  padding: 12px;
-  border-radius: 18px;
+  padding: 14px;
+  border-radius: 16px;
   background: #ffffffbf;
   border: 2px solid #ffe0ad;
 }
 .day-title { font-size: 18px; font-weight: 800; margin-bottom: 10px; }
+.day-courses { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .mini {
-  margin: 8px 0;
-  padding: 8px;
+  padding: 10px;
   border-radius: 12px;
   background: #eef8ff;
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .row {
   display: flex;
@@ -137,20 +137,23 @@ def week_html(member: ScheduleMember, week_start: datetime, occurrences: list[Cl
         day = week_start + timedelta(days=offset)
         day_items = [item for item in occurrences if item.start.date() == day.date()]
         parts = [
-            f'<div class="day-title">{day.strftime("%a")}<br>{day.strftime("%m-%d")}</div>'
+            f'<div class="day-title">{day.strftime("%a")} · {day.strftime("%m-%d")}</div>'
         ]
         if not day_items:
             parts.append('<div class="muted">没课</div>')
-        for item in day_items:
-            parts.append(
-                f'<div class="mini"><b>{item.title}</b><br>{_fmt_range(item)}'
-                f'<br>{item.location}</div>'
-            )
+        else:
+            courses = []
+            for item in day_items:
+                courses.append(
+                    f'<div class="mini"><b>{item.title}</b><br>{_fmt_range(item)}'
+                    f'<br>{item.location}</div>'
+                )
+            parts.append(f'<div class="day-courses">{"".join(courses)}</div>')
         days.append(f'<div class="day">{"".join(parts)}</div>')
     return f"""{STYLE}<div class="card">
   <div class="title">{member.display_name} 的本周课表</div>
   <div class="subtitle">{week_start.strftime("%Y-%m-%d")} 起</div>
-  <div class="grid">{"".join(days)}</div>
+  <div class="week-list">{"".join(days)}</div>
 </div>"""
 
 

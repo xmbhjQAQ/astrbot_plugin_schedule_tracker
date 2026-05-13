@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -110,5 +111,26 @@ class ScheduleStorage:
         if not member:
             return None
         member.privacy = privacy
+        self.save_groups(groups)
+        return member
+
+    def delete_schedule(
+        self,
+        groups: dict[str, GroupState],
+        *,
+        group_id: str,
+        user_id: str,
+    ) -> ScheduleMember | None:
+        group = groups.get(group_id)
+        if not group:
+            return None
+        member = group.members.pop(user_id, None)
+        if not member:
+            return None
+        try:
+            if member.ics_path and os.path.exists(member.ics_path):
+                os.remove(member.ics_path)
+        except OSError:
+            pass
         self.save_groups(groups)
         return member
