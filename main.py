@@ -19,8 +19,8 @@ from astrbot.api.message_components import At, File
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .ics_parser import CalendarDependencyError, CalendarParseError, IcsScheduleParser
-from .models import CurrentStatus, FileCandidate, PrivacyMode
-from .renderer import message_html, privacy_label, report_html, status_html, week_html
+from .models import FileCandidate, PrivacyMode
+from .renderer import privacy_label, report_html, status_html, week_html
 from .service import ScheduleService
 from .storage import ScheduleStorage
 
@@ -154,9 +154,12 @@ class ScheduleTrackerPlugin(star.Star):
             event.set_result(MessageEventResult().url_image(url).stop_event())
         except Exception as exc:
             logger.exception("课表图片渲染失败: %s", exc)
-            event.set_result(
-                MessageEventResult().message("课表图片渲染失败，请稍后再试。").stop_event()
-            )
+            self._reply_text(event, "课表图片渲染失败，请稍后再试。")
+
+    def _reply_text(self, event: AstrMessageEvent, text: str) -> None:
+        event.set_result(
+            MessageEventResult().message(text).use_t2i(False).stop_event()
+        )
 
     async def _handle_bind(self, event: AstrMessageEvent) -> None:
         group_id = event.get_group_id()
@@ -165,10 +168,7 @@ class ScheduleTrackerPlugin(star.Star):
         now = datetime.now(self.timezone)
         if not candidate or now - candidate.created_at > RECENT_FILE_WINDOW:
             self.pending_binds[(group_id, user_id)] = now
-            await self._reply_html(
-                event,
-                message_html("绑定课表", "请在 10 分钟内上传或转发自己的 .ics 文件。"),
-            )
+            self._reply_text(event, "请在 10 分钟内上传或转发自己的 .ics 文件。")
             return
 
         await self._bind_candidate(event, candidate, None)
@@ -192,16 +192,16 @@ class ScheduleTrackerPlugin(star.Star):
                 temp_file = File(name=candidate.file_name, file=candidate.file_url)
             file_path = await temp_file.get_file()
         if not file_path:
-            await self._reply_html(event, message_html("绑定课表", "没有拿到可下载的 ICS 文件。"))
+            self._reply_text(event, "没有拿到可下载的 ICS 文件。")
             return
 
         try:
             self.parser.occurrences_between(file_path, now, now + timedelta(days=7))
         except CalendarDependencyError as exc:
-            await self._reply_html(event, message_html("绑定课表", str(exc)))
+            self._reply_text(event, str(exc))
             return
         except CalendarParseError:
-            await self._reply_html(event, message_html("绑定课表", "这个 ICS 文件解析失败，请检查文件格式。"))
+            self._reply_text(event, "这个 ICS 文件解析失败，请检查文件格式。")
             return
 
         member = self.storage.bind_schedule(
@@ -213,58 +213,48 @@ class ScheduleTrackerPlugin(star.Star):
             source_path=file_path,
             timezone=self.timezone,
         )
-        await self._reply_html(
-            event,
-            message_html("绑定课表", f"{member.display_name} 的课表已绑定，默认公开。"),
-        )
+        self._reply_text(event, f"{member.display_name} 的课表已绑定，默认公开。")
 
     async def _handle_status(self, event: AstrMessageEvent) -> None:
         target = self._target_from_at(event)
         if not target:
-            await self._reply_html(event, message_html("在上课吗", "请 @ 一位要查询的群友。"))
+            self._reply_text(event, "请 @ 一位要查询的群友。")
             return
         target_id, _ = target
         member = self.groups.get(event.get_group_id(), None)
         schedule = member.members.get(target_id) if member else None
         if not schedule:
-            await self._reply_html(event, message_html("在上课吗", "这位群友还没有绑定课表。"))
+            self._reply_text(event, "这位群友还没有绑定课表。")
             return
         if schedule.privacy == PrivacyMode.PRIVATE and target_id != event.get_sender_id():
-            await self._reply_html(
-                event,
-                status_html(
-                    CurrentStatus(member=schedule, active=[], next_class=None),
-                    datetime.now(self.timezone),
-                    False,
-                ),
-            )
+            self._reply_text(event, "这位同学设置了私密，不能查询当前状态。")
             return
         now = datetime.now(self.timezone)
         try:
             status = self.service.current_status(schedule, now)
             await self._reply_html(event, status_html(status, now))
         except (CalendarDependencyError, CalendarParseError) as exc:
-            await self._reply_html(event, message_html("在上课吗", str(exc)))
+            self._reply_text(event, str(exc))
 
     async def _handle_week(self, event: AstrMessageEvent) -> None:
         target = self._target_from_at(event)
         if not target:
-            await self._reply_html(event, message_html("看看课表", "请 @ 一位要查询的群友。"))
+            self._reply_text(event, "请 @ 一位要查询的群友。")
             return
         target_id, _ = target
         group = self.groups.get(event.get_group_id())
         member = group.members.get(target_id) if group else None
         if not member:
-            await self._reply_html(event, message_html("看看课表", "这位群友还没有绑定课表。"))
+            self._reply_text(event, "这位群友还没有绑定课表。")
             return
         if member.privacy != PrivacyMode.PUBLIC and target_id != event.get_sender_id():
-            await self._reply_html(event, message_html("看看课表", "这位同学没有公开完整课表。"))
+            self._reply_text(event, "这位同学没有公开完整课表。")
             return
         try:
             week_start, occurrences = self.service.week_schedule(member, datetime.now(self.timezone))
             await self._reply_html(event, week_html(member, week_start, occurrences))
         except (CalendarDependencyError, CalendarParseError) as exc:
-            await self._reply_html(event, message_html("看看课表", str(exc)))
+            self._reply_text(event, str(exc))
 
     async def _handle_privacy(self, event: AstrMessageEvent, text: str) -> None:
         mapping = {
@@ -274,10 +264,7 @@ class ScheduleTrackerPlugin(star.Star):
         }
         mode = next((value for key, value in mapping.items() if text.endswith(key)), None)
         if mode is None:
-            await self._reply_html(
-                event,
-                message_html("课表隐私", "可选：课表隐私 公开 / 状态可查 / 私密"),
-            )
+            self._reply_text(event, "可选：课表隐私 公开 / 状态可查 / 私密")
             return
         member = self.storage.set_privacy(
             self.groups,
@@ -286,12 +273,9 @@ class ScheduleTrackerPlugin(star.Star):
             privacy=mode,
         )
         if not member:
-            await self._reply_html(event, message_html("课表隐私", "请先绑定课表。"))
+            self._reply_text(event, "请先绑定课表。")
             return
-        await self._reply_html(
-            event,
-            message_html("课表隐私", f"已切换为：{privacy_label(mode)}"),
-        )
+        self._reply_text(event, f"已切换为：{privacy_label(mode)}")
 
     async def _handle_delete(self, event: AstrMessageEvent) -> None:
         member = self.storage.delete_schedule(
@@ -302,9 +286,9 @@ class ScheduleTrackerPlugin(star.Star):
         self.recent_files.pop((event.get_group_id(), event.get_sender_id()), None)
         self.pending_binds.pop((event.get_group_id(), event.get_sender_id()), None)
         if not member:
-            await self._reply_html(event, message_html("删除课表", "你还没有绑定课表。"))
+            self._reply_text(event, "你还没有绑定课表。")
             return
-        await self._reply_html(event, message_html("删除课表", "已删除你的课表绑定。"))
+        self._reply_text(event, "已删除你的课表绑定。")
 
     async def _send_daily_reports(self) -> None:
         today = datetime.now(self.timezone).date()
