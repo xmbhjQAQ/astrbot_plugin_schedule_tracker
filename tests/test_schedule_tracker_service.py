@@ -86,6 +86,29 @@ def test_storage_load_groups_skips_invalid_member(tmp_path):
     assert groups["100"].members["200"].display_name == "Alice"
 
 
+def test_storage_persists_group_recall_overrides(tmp_path):
+    storage = ScheduleStorage(tmp_path)
+    groups = {}
+
+    storage.set_auto_recall_ics_uploads(
+        groups,
+        group_id="100",
+        unified_msg_origin="origin",
+        enabled=True,
+    )
+    storage.set_auto_recall_schedule_images(
+        groups,
+        group_id="100",
+        unified_msg_origin="origin",
+        enabled=False,
+    )
+
+    loaded = storage.load_groups()["100"]
+
+    assert loaded.auto_recall_ics_uploads is True
+    assert loaded.auto_recall_schedule_images is False
+
+
 class _DailyReportParser:
     def occurrences_between(self, ics_path, start, end):
         if ics_path == "broken.ics":

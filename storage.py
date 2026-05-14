@@ -1,3 +1,10 @@
+"""Persistence helpers for schedule tracker state.
+
+All files live under AstrBot's data/plugin_data directory, not inside the plugin
+source tree. That keeps user schedules intact when the plugin is updated or
+reinstalled.
+"""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +20,8 @@ from .models import GroupState, PrivacyMode, ScheduleMember
 
 
 class ScheduleStorage:
+    """Stores group state metadata and copied ICS files on disk."""
+
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
         self.schedules_dir = data_dir / "schedules"
@@ -21,6 +30,8 @@ class ScheduleStorage:
         self.schedules_dir.mkdir(parents=True, exist_ok=True)
 
     def load_groups(self) -> dict[str, GroupState]:
+        """Load persisted state, skipping damaged records instead of crashing."""
+
         if not self.state_path.exists():
             return {}
         try:
@@ -33,6 +44,9 @@ class ScheduleStorage:
         if not isinstance(raw, dict):
             logger.warning("课表状态文件结构无效，将以空状态启动。")
             return {}
+
+        # The state file is user data. Be conservative when reading it: a manual
+        # edit or interrupted write should not prevent the plugin from loading.
         raw_groups = raw.get("groups", {})
         if not isinstance(raw_groups, dict):
             logger.warning("课表状态文件 groups 字段无效，将以空状态启动。")
@@ -70,15 +84,23 @@ class ScheduleStorage:
                 unified_msg_origin=group_raw.get("unified_msg_origin", ""),
                 members=members,
                 daily_report_enabled=bool(group_raw.get("daily_report_enabled", False)),
+                auto_recall_ics_uploads=group_raw.get("auto_recall_ics_uploads"),
+                auto_recall_schedule_images=group_raw.get(
+                    "auto_recall_schedule_images"
+                ),
             )
         return groups
 
     def save_groups(self, groups: dict[str, GroupState]) -> None:
+        """Atomically write state metadata to reduce corruption on interruption."""
+
         raw = {"groups": {}}
         for group_id, group in groups.items():
             raw["groups"][group_id] = {
                 "unified_msg_origin": group.unified_msg_origin,
                 "daily_report_enabled": group.daily_report_enabled,
+                "auto_recall_ics_uploads": group.auto_recall_ics_uploads,
+                "auto_recall_schedule_images": group.auto_recall_schedule_images,
                 "members": {
                     user_id: {
                         "display_name": member.display_name,
@@ -105,6 +127,8 @@ class ScheduleStorage:
         source_path: str,
         timezone: ZoneInfo,
     ) -> ScheduleMember:
+        """Copy an ICS file into plugin data and register it for the member."""
+
         group = groups.setdefault(
             group_id,
             GroupState(
@@ -140,6 +164,8 @@ class ScheduleStorage:
         unified_msg_origin: str,
         enabled: bool,
     ) -> GroupState:
+        """Persist the daily report switch for one group."""
+
         group = groups.setdefault(
             group_id,
             GroupState(
@@ -151,6 +177,48 @@ class ScheduleStorage:
         self.save_groups(groups)
         return group
 
+    def set_auto_recall_ics_uploads(
+        self,
+        groups: dict[str, GroupState],
+        *,
+        group_id: str,
+        unified_msg_origin: str,
+        enabled: bool | None,
+    ) -> GroupState:
+        """Persist the group override for uploaded ICS message recall."""
+
+        group = groups.setdefault(
+            group_id,
+            GroupState(
+                group_id=group_id, unified_msg_origin=unified_msg_origin, members={}
+            ),
+        )
+        group.unified_msg_origin = unified_msg_origin
+        group.auto_recall_ics_uploads = enabled
+        self.save_groups(groups)
+        return group
+
+    def set_auto_recall_schedule_images(
+        self,
+        groups: dict[str, GroupState],
+        *,
+        group_id: str,
+        unified_msg_origin: str,
+        enabled: bool | None,
+    ) -> GroupState:
+        """Persist the group override for schedule image recall."""
+
+        group = groups.setdefault(
+            group_id,
+            GroupState(
+                group_id=group_id, unified_msg_origin=unified_msg_origin, members={}
+            ),
+        )
+        group.unified_msg_origin = unified_msg_origin
+        group.auto_recall_schedule_images = enabled
+        self.save_groups(groups)
+        return group
+
     def set_privacy(
         self,
         groups: dict[str, GroupState],
@@ -159,6 +227,8 @@ class ScheduleStorage:
         user_id: str,
         privacy: PrivacyMode,
     ) -> ScheduleMember | None:
+        """Update a member privacy mode while preserving their bound schedule."""
+
         member = groups.get(group_id, GroupState(group_id, "", {})).members.get(user_id)
         if not member:
             return None
@@ -173,6 +243,8 @@ class ScheduleStorage:
         group_id: str,
         user_id: str,
     ) -> ScheduleMember | None:
+        """Remove a member binding and best-effort delete its copied ICS file."""
+
         group = groups.get(group_id)
         if not group:
             return None
@@ -183,6 +255,8 @@ class ScheduleStorage:
             if member.ics_path and os.path.exists(member.ics_path):
                 os.remove(member.ics_path)
         except OSError:
+            # Metadata removal is more important than failing the whole command
+            # because a stale file could not be deleted.
             pass
         self.save_groups(groups)
         return member

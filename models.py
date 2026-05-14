@@ -27,6 +27,8 @@ class GroupState:
     unified_msg_origin: str
     members: dict[str, ScheduleMember]
     daily_report_enabled: bool = False
+    auto_recall_ics_uploads: bool | None = None
+    auto_recall_schedule_images: bool | None = None
 
 
 @dataclass(slots=True)
@@ -37,6 +39,7 @@ class FileCandidate:
     file_name: str
     file_url: str
     created_at: datetime
+    upload_message_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

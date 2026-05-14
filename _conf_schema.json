@@ -28,5 +28,23 @@
     "type": "text",
     "default": "{}",
     "hint": "JSON 格式：群号 -> 管理员 QQ 号列表，例如 {\"123456\": [\"10001\", \"10002\"]}"
+  },
+  "auto_recall_ics_uploads": {
+    "description": "自动撤回用户上传的 ICS 文件消息",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，群内指令未单独设置时会自动撤回 .ics 上传/转发消息，避免污染群文件"
+  },
+  "auto_recall_schedule_images": {
+    "description": "自动撤回课表查询图片",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，群内指令未单独设置时会自动撤回“在上课吗”和“看看课表”产生的图片"
+  },
+  "schedule_image_recall_seconds": {
+    "description": "课表查询图片撤回延迟秒数",
+    "type": "int",
+    "default": 90,
+    "hint": "默认 90 秒；仅在课表查询图片自动撤回开启时生效"
   }
 }

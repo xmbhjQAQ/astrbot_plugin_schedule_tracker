@@ -1,3 +1,10 @@
+"""AstrBot entrypoint for the schedule tracker plugin.
+
+This module keeps framework-specific concerns in one place: message routing,
+reply rendering, permission checks, and scheduler lifecycle. File binding,
+storage, parsing, and schedule calculations live in smaller helper modules.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,8 +27,10 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult
 from astrbot.api.message_components import At, File
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
+from .binding import ScheduleBinder
 from .ics_parser import CalendarDependencyError, CalendarParseError, IcsScheduleParser
 from .models import FileCandidate, PrivacyMode
+from .recall import delayed_recall, send_group_image
 from .renderer import privacy_label, report_html, status_html, week_html
 from .service import ScheduleService
 from .storage import ScheduleStorage
@@ -29,6 +38,7 @@ from .storage import ScheduleStorage
 
 PLUGIN_NAME = "astrbot_plugin_schedule_tracker"
 RECENT_FILE_WINDOW = timedelta(minutes=10)
+DEFAULT_IMAGE_RECALL_SECONDS = 90
 RENDER_SIZE_RE = re.compile(
     r'data-render-width="(\d+)".*?data-render-height="(\d+)"', re.S
 )
@@ -36,6 +46,8 @@ RENDER_SIZE_RE = re.compile(
 
 @star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.0")
 class ScheduleTrackerPlugin(star.Star):
+    """Group-message command surface for querying and maintaining schedules."""
+
     def __init__(
         self, context: star.Context, config: AstrBotConfig | None = None
     ) -> None:
@@ -54,12 +66,21 @@ class ScheduleTrackerPlugin(star.Star):
         self.groups = self.storage.load_groups()
         self.parser = IcsScheduleParser(self.timezone)
         self.service = ScheduleService(self.parser, self.timezone)
+        self.binder = ScheduleBinder(
+            parser=self.parser,
+            storage=self.storage,
+            groups=self.groups,
+            timezone=self.timezone,
+        )
         self.recent_files: dict[tuple[str, str], FileCandidate] = {}
         self.pending_binds: dict[tuple[str, str], datetime] = {}
+        self.recall_tasks: set[asyncio.Task] = set()
         self.scheduler: Any = None
         self._configure_report_job()
 
     def _configure_report_job(self) -> None:
+        """Start the optional APScheduler daily report job."""
+
         if AsyncIOScheduler is None or CronTrigger is None:
             logger.warning("缺少 apscheduler，课表自动日报已禁用。")
             return
@@ -89,6 +110,9 @@ class ScheduleTrackerPlugin(star.Star):
     async def terminate(self) -> None:
         if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+        for task in self.recall_tasks:
+            task.cancel()
+        self.recall_tasks.clear()
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent) -> None:
@@ -107,10 +131,14 @@ class ScheduleTrackerPlugin(star.Star):
             await self._handle_privacy(event, text)
         elif text.startswith("课表日报"):
             await self._handle_daily_report_setting(event, text)
+        elif text.startswith("课表撤回"):
+            await self._handle_recall_setting(event, text)
         elif text == "删除课表":
             await self._handle_delete(event)
 
     async def _remember_ics_files(self, event: AstrMessageEvent) -> bool:
+        """Remember recent ICS uploads so the next bind command can consume them."""
+
         group_id = event.get_group_id()
         user_id = event.get_sender_id()
         if not group_id or not user_id:
@@ -124,6 +152,10 @@ class ScheduleTrackerPlugin(star.Star):
             file_ref = component.url or getattr(component, "file_", "")
             if not file_ref:
                 continue
+
+            # QQ forwarded files can arrive before the user sends "绑定课表".
+            # Keep a short-lived candidate keyed by group and sender to avoid
+            # binding someone else's file by accident.
             candidate = FileCandidate(
                 group_id=group_id,
                 user_id=user_id,
@@ -131,8 +163,15 @@ class ScheduleTrackerPlugin(star.Star):
                 file_name=name,
                 file_url=file_ref,
                 created_at=datetime.now(self.timezone),
+                upload_message_id=str(getattr(event.message_obj, "message_id", "")),
             )
             self.recent_files[(group_id, user_id)] = candidate
+            if self._auto_recall_ics_uploads_enabled(group_id):
+                self._schedule_message_recall(
+                    event,
+                    candidate.upload_message_id,
+                    int(RECENT_FILE_WINDOW.total_seconds()),
+                )
             pending_at = self.pending_binds.get((group_id, user_id))
             if pending_at and candidate.created_at - pending_at <= RECENT_FILE_WINDOW:
                 self.pending_binds.pop((group_id, user_id), None)
@@ -148,6 +187,8 @@ class ScheduleTrackerPlugin(star.Star):
         return None
 
     def _is_group_admin(self, group_id: str | None, user_id: str | None) -> bool:
+        """Check the plugin-managed admin allowlist for a group."""
+
         if not group_id or not user_id:
             return False
         return user_id in self._group_admin_ids(group_id)
@@ -162,6 +203,8 @@ class ScheduleTrackerPlugin(star.Star):
         return {str(group_id).strip() for group_id in raw if str(group_id).strip()}
 
     def _configured_group_admins(self, group_id: str) -> set[str]:
+        """Read admin IDs from config, accepting JSON text or structured values."""
+
         raw = self.config.get("group_admins", {})
         if isinstance(raw, str):
             try:
@@ -182,10 +225,43 @@ class ScheduleTrackerPlugin(star.Star):
         return self._configured_group_admins(group_id)
 
     def _daily_report_enabled(self, group: Any) -> bool:
+        """Merge persisted group state with WebUI-configured defaults."""
+
         return bool(
             group.daily_report_enabled
             or group.group_id in self._configured_daily_report_groups()
         )
+
+    def _config_bool(self, key: str, default: bool = False) -> bool:
+        raw = self.config.get(key, default)
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str):
+            return raw.strip().lower() in {"1", "true", "yes", "on", "开启"}
+        return bool(raw)
+
+    def _image_recall_seconds(self) -> int:
+        try:
+            seconds = int(
+                self.config.get(
+                    "schedule_image_recall_seconds", DEFAULT_IMAGE_RECALL_SECONDS
+                )
+            )
+        except (TypeError, ValueError):
+            return DEFAULT_IMAGE_RECALL_SECONDS
+        return max(1, seconds)
+
+    def _auto_recall_ics_uploads_enabled(self, group_id: str | None) -> bool:
+        group = self.groups.get(group_id or "")
+        if group and group.auto_recall_ics_uploads is not None:
+            return group.auto_recall_ics_uploads
+        return self._config_bool("auto_recall_ics_uploads", False)
+
+    def _auto_recall_schedule_images_enabled(self, group_id: str | None) -> bool:
+        group = self.groups.get(group_id or "")
+        if group and group.auto_recall_schedule_images is not None:
+            return group.auto_recall_schedule_images
+        return self._config_bool("auto_recall_schedule_images", False)
 
     def _save_plugin_config(self) -> None:
         save_config = getattr(self.config, "save_config", None)
@@ -205,6 +281,8 @@ class ScheduleTrackerPlugin(star.Star):
         self._save_plugin_config()
 
     def _render_options(self, html: str) -> dict[str, Any]:
+        """Build html_render screenshot options from renderer frame metadata."""
+
         options: dict[str, Any] = {
             "type": "png",
             "animations": "disabled",
@@ -239,12 +317,41 @@ class ScheduleTrackerPlugin(star.Star):
         event: AstrMessageEvent,
         html: str,
     ) -> None:
+        """Render an HTML view and fall back to plain text on renderer failures."""
+
         try:
             url = await self._render_image(html)
             event.set_result(MessageEventResult().url_image(url).stop_event())
         except Exception as exc:
             logger.exception("课表图片渲染失败: %s", exc)
             self._reply_text(event, "课表图片渲染失败，请稍后再试。")
+
+    async def _reply_query_html(
+        self,
+        event: AstrMessageEvent,
+        html: str,
+    ) -> None:
+        """Reply with status/week images, optionally sending via OneBot for recall."""
+
+        if not self._auto_recall_schedule_images_enabled(event.get_group_id()):
+            await self._reply_html(event, html)
+            return
+        if event.get_platform_name() != "aiocqhttp" or not event.get_group_id():
+            logger.warning("当前平台不支持课表图片自动撤回，已使用普通图片回复。")
+            await self._reply_html(event, html)
+            return
+        try:
+            url = await self._render_image(html)
+            message_id = await send_group_image(event.bot, event.get_group_id(), url)
+            self._schedule_onebot_recall(
+                event.bot,
+                message_id,
+                self._image_recall_seconds(),
+            )
+            event.stop_event()
+        except Exception as exc:
+            logger.exception("课表图片发送或自动撤回调度失败: %s", exc)
+            self._reply_text(event, "课表图片发送失败，请稍后再试。")
 
     def _reply_text(self, event: AstrMessageEvent, text: str) -> None:
         event.set_result(MessageEventResult().message(text).use_t2i(False).stop_event())
@@ -261,6 +368,8 @@ class ScheduleTrackerPlugin(star.Star):
         )
 
     async def _handle_bind(self, event: AstrMessageEvent) -> None:
+        """Bind the sender's most recent ICS upload, or ask them to upload one."""
+
         group_id = event.get_group_id()
         user_id = event.get_sender_id()
         candidate = self.recent_files.get((group_id, user_id))
@@ -281,54 +390,14 @@ class ScheduleTrackerPlugin(star.Star):
         candidate: FileCandidate,
         component: File | None,
     ) -> None:
-        group_id = event.get_group_id()
-        user_id = event.get_sender_id()
-        if not group_id or not user_id:
-            self._reply_text(event, "只能在群聊中绑定自己的课表。")
-            return
-        now = datetime.now(self.timezone)
-        file_path = ""
-        try:
-            if component is not None:
-                file_path = await component.get_file()
-            if not file_path:
-                if candidate.file_url.startswith(("http://", "https://")):
-                    temp_file = File(name=candidate.file_name, url=candidate.file_url)
-                else:
-                    temp_file = File(name=candidate.file_name, file=candidate.file_url)
-                file_path = await temp_file.get_file()
-        except Exception as exc:
-            logger.exception("课表 ICS 文件下载失败: %s", exc)
-            self._reply_text(event, "ICS 文件下载失败，请稍后重试或重新上传。")
-            return
-        if not file_path:
-            self._reply_text(event, "没有拿到可下载的 ICS 文件。")
-            return
+        """Delegate candidate binding and translate the result into a reply."""
 
-        try:
-            self.parser.occurrences_between(file_path, now, now + timedelta(days=7))
-        except CalendarDependencyError as exc:
-            self._reply_text(event, str(exc))
-            return
-        except CalendarParseError:
-            self._reply_text(event, "这个 ICS 文件解析失败，请检查文件格式。")
-            return
-
-        try:
-            member = self.storage.bind_schedule(
-                self.groups,
-                group_id=group_id,
-                unified_msg_origin=event.unified_msg_origin,
-                user_id=user_id,
-                display_name=event.get_sender_name() or user_id,
-                source_path=file_path,
-                timezone=self.timezone,
-            )
-        except OSError as exc:
-            logger.exception("保存课表 ICS 文件失败: %s", exc)
-            self._reply_text(event, "课表保存失败，请稍后再试。")
-            return
-        self._reply_text(event, f"{member.display_name} 的课表已绑定，默认公开。")
+        result = await self.binder.bind_candidate(event, candidate, component)
+        if result.member and self._auto_recall_ics_uploads_enabled(
+            event.get_group_id()
+        ):
+            self._schedule_message_recall(event, candidate.upload_message_id, 1)
+        self._reply_text(event, result.message)
 
     async def _handle_status(self, event: AstrMessageEvent) -> None:
         target = self._target_from_at(event)
@@ -350,7 +419,7 @@ class ScheduleTrackerPlugin(star.Star):
         now = datetime.now(self.timezone)
         try:
             status = self.service.current_status(schedule, now)
-            await self._reply_html(
+            await self._reply_query_html(
                 event, status_html(status, now, avatar_url=self._avatar_url(target_id))
             )
         except (CalendarDependencyError, CalendarParseError) as exc:
@@ -374,7 +443,7 @@ class ScheduleTrackerPlugin(star.Star):
             week_start, occurrences = self.service.week_schedule(
                 member, datetime.now(self.timezone)
             )
-            await self._reply_html(
+            await self._reply_query_html(
                 event,
                 week_html(
                     member,
@@ -456,6 +525,79 @@ class ScheduleTrackerPlugin(star.Star):
         state = "开启" if enabled else "关闭"
         self._reply_text(event, f"已{state}本群课表日报。")
 
+    async def _handle_recall_setting(self, event: AstrMessageEvent, text: str) -> None:
+        group_id = event.get_group_id()
+        if not group_id:
+            self._reply_text(event, "课表撤回设置只能在群聊中使用。")
+            return
+        action_text = text.removeprefix("课表撤回").strip()
+        if action_text in {"", "状态"}:
+            upload_state = (
+                "开启" if self._auto_recall_ics_uploads_enabled(group_id) else "关闭"
+            )
+            image_state = (
+                "开启"
+                if self._auto_recall_schedule_images_enabled(group_id)
+                else "关闭"
+            )
+            self._reply_text(
+                event,
+                f"本群课表撤回：ICS 文件{upload_state}，查询图片{image_state}（{self._image_recall_seconds()} 秒）。",
+            )
+            return
+        parts = action_text.split()
+        if len(parts) != 2 or parts[0] not in {"文件", "上传", "图片"}:
+            self._reply_text(
+                event,
+                "可选：课表撤回 状态 / 文件 开启 / 文件 关闭 / 文件 跟随配置 / 图片 开启 / 图片 关闭 / 图片 跟随配置",
+            )
+            return
+        if not self._has_group_admins(group_id):
+            self._reply_text(event, "请先在 WebUI 配置本群课表管理员。")
+            return
+        if not self._is_group_admin(group_id, event.get_sender_id()):
+            self._reply_text(event, "只有本群课表管理员可以修改撤回开关。")
+            return
+        try:
+            enabled = self._parse_recall_switch(parts[1])
+        except ValueError:
+            self._reply_text(event, "开关只能是：开启 / 关闭 / 跟随配置")
+            return
+        try:
+            if parts[0] in {"文件", "上传"}:
+                self.storage.set_auto_recall_ics_uploads(
+                    self.groups,
+                    group_id=group_id,
+                    unified_msg_origin=event.unified_msg_origin,
+                    enabled=enabled,
+                )
+                label = "ICS 文件"
+            else:
+                self.storage.set_auto_recall_schedule_images(
+                    self.groups,
+                    group_id=group_id,
+                    unified_msg_origin=event.unified_msg_origin,
+                    enabled=enabled,
+                )
+                label = "查询图片"
+        except OSError as exc:
+            logger.exception("保存课表撤回设置失败: %s", exc)
+            self._reply_text(event, "撤回设置保存失败，请稍后再试。")
+            return
+        state = (
+            "跟随 WebUI 配置" if enabled is None else ("开启" if enabled else "关闭")
+        )
+        self._reply_text(event, f"已设置本群{label}自动撤回：{state}。")
+
+    def _parse_recall_switch(self, text: str) -> bool | None:
+        if text == "开启":
+            return True
+        if text == "关闭":
+            return False
+        if text == "跟随配置":
+            return None
+        raise ValueError("invalid recall switch")
+
     async def _handle_delete(self, event: AstrMessageEvent) -> None:
         try:
             member = self.storage.delete_schedule(
@@ -474,7 +616,31 @@ class ScheduleTrackerPlugin(star.Star):
             return
         self._reply_text(event, "已删除你的课表绑定。")
 
+    def _schedule_message_recall(
+        self,
+        event: AstrMessageEvent,
+        message_id: str,
+        delay_seconds: int,
+    ) -> None:
+        if event.get_platform_name() != "aiocqhttp" or not message_id:
+            return
+        self._schedule_onebot_recall(event.bot, message_id, delay_seconds)
+
+    def _schedule_onebot_recall(
+        self,
+        bot: Any,
+        message_id: str,
+        delay_seconds: int,
+    ) -> None:
+        if not message_id:
+            return
+        task = asyncio.create_task(delayed_recall(bot, message_id, delay_seconds))
+        self.recall_tasks.add(task)
+        task.add_done_callback(self.recall_tasks.discard)
+
     async def _send_daily_reports(self) -> None:
+        """Send scheduled group reports while isolating per-group failures."""
+
         today = datetime.now(self.timezone).date()
         for group in self.groups.values():
             if not self._daily_report_enabled(group):

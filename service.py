@@ -1,3 +1,5 @@
+"""Pure schedule calculations used by command handlers and daily reports."""
+
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
@@ -17,11 +19,15 @@ from .models import (
 
 
 def day_bounds(day: date, timezone: ZoneInfo) -> tuple[datetime, datetime]:
+    """Return the inclusive start and exclusive end for a local calendar day."""
+
     start = datetime.combine(day, time.min, tzinfo=timezone)
     return start, start + timedelta(days=1)
 
 
 def week_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """Return the Monday-to-Monday window containing ``now``."""
+
     local = now.astimezone(now.tzinfo)
     monday = local.date() - timedelta(days=local.weekday())
     start = datetime.combine(monday, time.min, tzinfo=local.tzinfo)
@@ -29,6 +35,8 @@ def week_bounds(now: datetime) -> tuple[datetime, datetime]:
 
 
 def merged_minutes(occurrences: list[ClassOccurrence]) -> int:
+    """Count occupied minutes without double-counting overlapping events."""
+
     if not occurrences:
         return 0
     intervals = sorted((item.start, item.end) for item in occurrences)
@@ -43,11 +51,15 @@ def merged_minutes(occurrences: list[ClassOccurrence]) -> int:
 
 
 class ScheduleService:
+    """Read parsed ICS occurrences and shape them for plugin features."""
+
     def __init__(self, parser: IcsScheduleParser, timezone: ZoneInfo) -> None:
         self.parser = parser
         self.timezone = timezone
 
     def current_status(self, member: ScheduleMember, now: datetime) -> CurrentStatus:
+        """Return active classes and the next upcoming class for one member."""
+
         start = now - timedelta(hours=12)
         end = now + timedelta(days=14)
         occurrences = self.parser.occurrences_between(member.ics_path, start, end)
@@ -60,10 +72,14 @@ class ScheduleService:
         member: ScheduleMember,
         now: datetime,
     ) -> tuple[datetime, list[ClassOccurrence]]:
+        """Return this week's occurrences for a member."""
+
         start, end = week_bounds(now)
         return start, self.parser.occurrences_between(member.ics_path, start, end)
 
     def daily_report(self, group: GroupState, day: date) -> list[DailyReportRow]:
+        """Rank non-empty member schedules by total occupied minutes."""
+
         start, end = day_bounds(day, self.timezone)
         rows: list[DailyReportRow] = []
         for member in group.members.values():
