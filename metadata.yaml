@@ -2,7 +2,7 @@ name: astrbot_plugin_schedule_tracker
 display_name: QQ 群课表追踪
 description: 通过 ICS 日历追踪 QQ 群友课表、当前上课状态和每日上课时长。
 short_desc: QQ 群友课表查询与日报图片
-version: 0.1.0
+version: 0.1.1
 author: xmbhjQAQ
 repo: ""
 astrbot_version: ">=4.9.2"

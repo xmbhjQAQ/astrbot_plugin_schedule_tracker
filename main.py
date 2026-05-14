@@ -44,7 +44,7 @@ RENDER_SIZE_RE = re.compile(
 )
 
 
-@star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.0")
+@star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.1")
 class ScheduleTrackerPlugin(star.Star):
     """Group-message command surface for querying and maintaining schedules."""
 
