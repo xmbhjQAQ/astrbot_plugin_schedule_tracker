@@ -96,6 +96,8 @@ class ScheduleTrackerPlugin(star.Star):
             await self._handle_week(event)
         elif text.startswith("课表隐私"):
             await self._handle_privacy(event, text)
+        elif text.startswith("课表日报"):
+            await self._handle_daily_report_setting(event, text)
         elif text == "删除课表":
             await self._handle_delete(event)
 
@@ -135,6 +137,62 @@ class ScheduleTrackerPlugin(star.Star):
             if isinstance(component, At) and str(component.qq) not in {"all", bot_id}:
                 return str(component.qq), component.name or str(component.qq)
         return None
+
+    def _is_group_admin(self, group_id: str | None, user_id: str | None) -> bool:
+        if not group_id or not user_id:
+            return False
+        return user_id in self._group_admin_ids(group_id)
+
+    def _has_group_admins(self, group_id: str | None) -> bool:
+        return bool(group_id and self._configured_group_admins(group_id))
+
+    def _configured_daily_report_groups(self) -> set[str]:
+        raw = self.config.get("daily_report_enabled_groups", [])
+        if not isinstance(raw, list):
+            return set()
+        return {str(group_id).strip() for group_id in raw if str(group_id).strip()}
+
+    def _configured_group_admins(self, group_id: str) -> set[str]:
+        raw = self.config.get("group_admins", {})
+        if not isinstance(raw, dict):
+            return set()
+        value = raw.get(group_id) or raw.get(str(group_id))
+        if isinstance(value, list):
+            return {str(user_id).strip() for user_id in value if str(user_id).strip()}
+        if isinstance(value, str):
+            return {
+                user_id
+                for user_id in re.split(r"[\s,，]+", value)
+                if user_id
+            }
+        return set()
+
+    def _group_admin_ids(self, group_id: str) -> set[str]:
+        return self._configured_group_admins(group_id)
+
+    def _daily_report_enabled(self, group: Any) -> bool:
+        return bool(
+            group.daily_report_enabled
+            or group.group_id in self._configured_daily_report_groups()
+        )
+
+    def _save_plugin_config(self) -> None:
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            save_config()
+
+    def _sync_daily_report_group_config(self, group_id: str, enabled: bool) -> None:
+        groups = self.config.get("daily_report_enabled_groups", [])
+        if not isinstance(groups, list):
+            groups = []
+        group_ids = {str(item).strip() for item in groups if str(item).strip()}
+        if enabled:
+            group_ids.add(group_id)
+        else:
+            group_ids.discard(group_id)
+        self.config["daily_report_enabled_groups"] = sorted(group_ids)
+        self._save_plugin_config()
+
 
     def _render_options(self, html: str) -> dict[str, Any]:
         options: dict[str, Any] = {
@@ -299,6 +357,41 @@ class ScheduleTrackerPlugin(star.Star):
             return
         self._reply_text(event, f"已切换为：{privacy_label(mode)}")
 
+    async def _handle_daily_report_setting(self, event: AstrMessageEvent, text: str) -> None:
+        group_id = event.get_group_id()
+        if not group_id:
+            self._reply_text(event, "课表日报只能在群聊中设置。")
+            return
+        action = text.removeprefix("课表日报").strip()
+        group = self.groups.get(group_id)
+        if action == "状态":
+            enabled = bool(
+                group_id in self._configured_daily_report_groups()
+                or (group and group.daily_report_enabled)
+            )
+            state = "已开启" if enabled else "已关闭"
+            self._reply_text(event, f"本群课表日报：{state}。")
+            return
+        if action not in {"开启", "关闭"}:
+            self._reply_text(event, "可选：课表日报 开启 / 关闭 / 状态")
+            return
+        if not self._has_group_admins(group_id):
+            self._reply_text(event, "请先在 WebUI 配置本群课表管理员。")
+            return
+        if not self._is_group_admin(group_id, event.get_sender_id()):
+            self._reply_text(event, "只有本群课表管理员可以修改日报开关。")
+            return
+        enabled = action == "开启"
+        self.storage.set_daily_report_enabled(
+            self.groups,
+            group_id=group_id,
+            unified_msg_origin=event.unified_msg_origin,
+            enabled=enabled,
+        )
+        self._sync_daily_report_group_config(group_id, enabled)
+        state = "开启" if enabled else "关闭"
+        self._reply_text(event, f"已{state}本群课表日报。")
+
     async def _handle_delete(self, event: AstrMessageEvent) -> None:
         member = self.storage.delete_schedule(
             self.groups,
@@ -315,6 +408,8 @@ class ScheduleTrackerPlugin(star.Star):
     async def _send_daily_reports(self) -> None:
         today = datetime.now(self.timezone).date()
         for group in self.groups.values():
+            if not self._daily_report_enabled(group):
+                continue
             public_group = type(group)(
                 group_id=group.group_id,
                 unified_msg_origin=group.unified_msg_origin,
@@ -323,6 +418,7 @@ class ScheduleTrackerPlugin(star.Star):
                     for user_id, member in group.members.items()
                     if member.privacy != PrivacyMode.PRIVATE
                 },
+                daily_report_enabled=group.daily_report_enabled,
             )
             if not public_group.unified_msg_origin:
                 continue

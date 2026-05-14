@@ -26,6 +26,7 @@ class GroupState:
     group_id: str
     unified_msg_origin: str
     members: dict[str, ScheduleMember]
+    daily_report_enabled: bool = False
 
 
 @dataclass(slots=True)

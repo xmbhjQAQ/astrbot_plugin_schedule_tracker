@@ -41,6 +41,7 @@ class ScheduleStorage:
                 group_id=group_id,
                 unified_msg_origin=group_raw.get("unified_msg_origin", ""),
                 members=members,
+                daily_report_enabled=bool(group_raw.get("daily_report_enabled", False)),
             )
         return groups
 
@@ -49,6 +50,7 @@ class ScheduleStorage:
         for group_id, group in groups.items():
             raw["groups"][group_id] = {
                 "unified_msg_origin": group.unified_msg_origin,
+                "daily_report_enabled": group.daily_report_enabled,
                 "members": {
                     user_id: {
                         "display_name": member.display_name,
@@ -98,6 +100,23 @@ class ScheduleStorage:
         group.members[user_id] = member
         self.save_groups(groups)
         return member
+
+    def set_daily_report_enabled(
+        self,
+        groups: dict[str, GroupState],
+        *,
+        group_id: str,
+        unified_msg_origin: str,
+        enabled: bool,
+    ) -> GroupState:
+        group = groups.setdefault(
+            group_id,
+            GroupState(group_id=group_id, unified_msg_origin=unified_msg_origin, members={}),
+        )
+        group.unified_msg_origin = unified_msg_origin
+        group.daily_report_enabled = enabled
+        self.save_groups(groups)
+        return group
 
     def set_privacy(
         self,
