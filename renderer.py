@@ -216,30 +216,45 @@ body {
   border-right: 1px solid #d8e3ee;
 }
 .day-column {
-  background:
-    repeating-linear-gradient(
-      to bottom,
-      #ffffff 0,
-      #ffffff 59px,
-      #eef3f8 60px
-    );
+  background: #ffffff;
   border-right: 1px solid #e0e8f1;
 }
 .day-column:last-child {
   border-right: 0;
 }
+.grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #eef3f8;
+  pointer-events: none;
+}
+.grid-line.course-boundary {
+  left: 10px;
+  right: 10px;
+  background: rgba(79, 131, 196, 0.16);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+.time-axis .grid-line {
+  background: #dfe7f0;
+}
 .time-label {
   position: absolute;
-  left: 10px;
+  left: 8px;
+  right: 8px;
   transform: translateY(-50%);
   color: #718094;
   font-size: 12px;
   font-weight: 800;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
 }
 .week-course {
   position: absolute;
-  left: 7px;
-  right: 7px;
+  left: 10px;
+  right: 10px;
   min-height: 28px;
   padding: 8px 9px;
   border-radius: 13px;
@@ -419,7 +434,7 @@ def status_html(
     else:
         content = '<div class="status">现在没有课</div><div class="empty">未来两周内没有找到课程。</div>'
         block_count = 1
-    height = 190 + max(1, block_count) * 104
+    height = 230 + max(1, block_count) * 132
     body = f"""<div class="surface">
 {_header(f"{member.display_name} 的上课状态", now.strftime("%Y-%m-%d %H:%M"), "实时状态", member, avatar_url)}
   <div class="hero">{content}</div>
@@ -450,6 +465,25 @@ def _time_label(minute: int) -> str:
     return f"{hour:02d}:{mins:02d}"
 
 
+def _grid_top(minute: int, start_minute: int, total_minutes: int, grid_height: int) -> float:
+    return (minute - start_minute) / total_minutes * grid_height
+
+
+def _grid_lines(
+    minutes: list[int],
+    boundary_minutes: set[int],
+    start_minute: int,
+    total_minutes: int,
+    grid_height: int,
+) -> str:
+    lines = []
+    for minute in minutes:
+        line_class = "grid-line course-boundary" if minute in boundary_minutes else "grid-line"
+        top = _grid_top(minute, start_minute, total_minutes, grid_height)
+        lines.append(f'<div class="{line_class}" style="top:{top:.2f}px"></div>')
+    return "".join(lines)
+
+
 def week_html(
     member: ScheduleMember,
     week_start: datetime,
@@ -459,7 +493,7 @@ def week_html(
     start_minute, end_minute = _time_bounds(occurrences)
     total_minutes = max(MIN_GRID_MINUTES, end_minute - start_minute)
     grid_height = max(360, total_minutes)
-    height = 160 + 54 + grid_height
+    height = 190 + 54 + grid_height
     items_by_day: dict[int, list[ClassOccurrence]] = defaultdict(list)
     for item in sorted(occurrences, key=lambda occ: (occ.start, occ.end)):
         day_index = (item.start.date() - week_start.date()).days
@@ -472,8 +506,11 @@ def week_html(
     ]
     label_step = 60 if total_minutes <= 720 else 120
     first_label = ceil(start_minute / label_step) * label_step
-    for minute in range(first_label, end_minute + 1, label_step):
-        top = (minute - start_minute) / total_minutes * grid_height
+    hour_label_minutes = list(range(first_label, end_minute + 1, label_step))
+    base_line_minutes = sorted(set(hour_label_minutes) | {start_minute, end_minute})
+    columns.append(_grid_lines(base_line_minutes, set(), start_minute, total_minutes, grid_height))
+    for minute in hour_label_minutes:
+        top = _grid_top(minute, start_minute, total_minutes, grid_height)
         columns.append(
             f'<div class="time-label" style="top:{top:.2f}px">{_time_label(minute)}</div>'
         )
@@ -486,10 +523,15 @@ def week_html(
             f'<div class="day-date">{day.strftime("%m-%d")}</div></div>'
         )
         courses = []
+        boundary_minutes: set[int] = set()
         for item in items_by_day.get(offset, []):
             item_start = max(start_minute, _minute_of_day(item.start))
             item_end = min(end_minute, _minute_of_day(item.end))
-            top = (item_start - start_minute) / total_minutes * grid_height
+            if start_minute <= item_start <= end_minute:
+                boundary_minutes.add(item_start)
+            if start_minute <= item_end <= end_minute:
+                boundary_minutes.add(item_end)
+            top = _grid_top(item_start, start_minute, total_minutes, grid_height)
             course_height = max(30, (item_end - item_start) / total_minutes * grid_height)
             location = f'<div class="week-course-meta">{_html(item.location)}</div>' if item.location else ""
             courses.append(
@@ -499,8 +541,11 @@ def week_html(
             )
         if not courses:
             courses.append('<div class="empty" style="margin:12px">没课</div>')
+        line_minutes = sorted(set(base_line_minutes) | boundary_minutes)
         columns.append(
-            f'<div class="day-column" style="--grid-height:{grid_height}px">{"".join(courses)}</div>'
+            f'<div class="day-column" style="--grid-height:{grid_height}px">'
+            f'{_grid_lines(line_minutes, boundary_minutes, start_minute, total_minutes, grid_height)}'
+            f'{"".join(courses)}</div>'
         )
 
     body = f"""<div class="surface">
