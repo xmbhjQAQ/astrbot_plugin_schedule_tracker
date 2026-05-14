@@ -591,7 +591,7 @@ def report_html(group_name: str, day: datetime, rows: list[DailyReportRow]) -> s
         content = '<div class="hero"><div class="status">今天大家都没有课</div><div class="empty">没有可展示的课时排行。</div></div>'
     height = 170 + max(1, len(rows)) * 78
     body = f"""<div class="surface">
-{_header(f"{group_name or '群聊'} 今日课时小结", f'{day.strftime("%Y-%m-%d")} · 仅统计非私密且当天有课的成员', "日报")}
+{_header("本群今日课时小结", f'{day.strftime("%Y-%m-%d")} · 仅统计非私密且当天有课的成员', "日报")}
   {content}
 </div>"""
     return _frame(REPORT_WIDTH, height, body)
