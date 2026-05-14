@@ -15,7 +15,9 @@ class CalendarParseError(ValueError):
     pass
 
 
-def _coerce_datetime(value: datetime | date, timezone: ZoneInfo, end: bool = False) -> datetime:
+def _coerce_datetime(
+    value: datetime | date, timezone: ZoneInfo, end: bool = False
+) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone)

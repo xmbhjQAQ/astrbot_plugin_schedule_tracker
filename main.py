@@ -29,19 +29,25 @@ from .storage import ScheduleStorage
 
 PLUGIN_NAME = "astrbot_plugin_schedule_tracker"
 RECENT_FILE_WINDOW = timedelta(minutes=10)
-RENDER_SIZE_RE = re.compile(r'data-render-width="(\d+)".*?data-render-height="(\d+)"', re.S)
+RENDER_SIZE_RE = re.compile(
+    r'data-render-width="(\d+)".*?data-render-height="(\d+)"', re.S
+)
 
 
 @star.register(PLUGIN_NAME, "xmbhjQAQ", "QQ群 ICS 课表追踪插件", "0.1.0")
 class ScheduleTrackerPlugin(star.Star):
-    def __init__(self, context: star.Context, config: AstrBotConfig | None = None) -> None:
+    def __init__(
+        self, context: star.Context, config: AstrBotConfig | None = None
+    ) -> None:
         super().__init__(context)
         self.config = config or {}
         timezone_name = str(self.config.get("timezone", "Asia/Shanghai"))
         try:
             self.timezone = ZoneInfo(timezone_name)
         except Exception:
-            logger.warning("课表插件时区配置无效，回退到 Asia/Shanghai: %s", timezone_name)
+            logger.warning(
+                "课表插件时区配置无效，回退到 Asia/Shanghai: %s", timezone_name
+            )
             self.timezone = ZoneInfo("Asia/Shanghai")
         data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
         self.storage = ScheduleStorage(data_dir)
@@ -169,11 +175,7 @@ class ScheduleTrackerPlugin(star.Star):
         if isinstance(value, list):
             return {str(user_id).strip() for user_id in value if str(user_id).strip()}
         if isinstance(value, str):
-            return {
-                user_id
-                for user_id in re.split(r"[\s,，]+", value)
-                if user_id
-            }
+            return {user_id for user_id in re.split(r"[\s,，]+", value) if user_id}
         return set()
 
     def _group_admin_ids(self, group_id: str) -> set[str]:
@@ -201,7 +203,6 @@ class ScheduleTrackerPlugin(star.Star):
             group_ids.discard(group_id)
         self.config["daily_report_enabled_groups"] = sorted(group_ids)
         self._save_plugin_config()
-
 
     def _render_options(self, html: str) -> dict[str, Any]:
         options: dict[str, Any] = {
@@ -246,9 +247,7 @@ class ScheduleTrackerPlugin(star.Star):
             self._reply_text(event, "课表图片渲染失败，请稍后再试。")
 
     def _reply_text(self, event: AstrMessageEvent, text: str) -> None:
-        event.set_result(
-            MessageEventResult().message(text).use_t2i(False).stop_event()
-        )
+        event.set_result(MessageEventResult().message(text).use_t2i(False).stop_event())
 
     def _handle_how_to_add_schedule(self, event: AstrMessageEvent) -> None:
         reply = str(
@@ -257,7 +256,9 @@ class ScheduleTrackerPlugin(star.Star):
                 "请发送“绑定课表”，然后在 10 分钟内上传或转发自己的 .ics 日历文件。",
             )
         ).strip()
-        self._reply_text(event, reply or "请发送“绑定课表”，然后上传或转发自己的 .ics 日历文件。")
+        self._reply_text(
+            event, reply or "请发送“绑定课表”，然后上传或转发自己的 .ics 日历文件。"
+        )
 
     async def _handle_bind(self, event: AstrMessageEvent) -> None:
         group_id = event.get_group_id()
@@ -265,6 +266,9 @@ class ScheduleTrackerPlugin(star.Star):
         candidate = self.recent_files.get((group_id, user_id))
         now = datetime.now(self.timezone)
         if not candidate or now - candidate.created_at > RECENT_FILE_WINDOW:
+            if not group_id or not user_id:
+                self._reply_text(event, "只能在群聊中绑定自己的课表。")
+                return
             self.pending_binds[(group_id, user_id)] = now
             self._reply_text(event, "请在 10 分钟内上传或转发自己的 .ics 文件。")
             return
@@ -279,16 +283,24 @@ class ScheduleTrackerPlugin(star.Star):
     ) -> None:
         group_id = event.get_group_id()
         user_id = event.get_sender_id()
+        if not group_id or not user_id:
+            self._reply_text(event, "只能在群聊中绑定自己的课表。")
+            return
         now = datetime.now(self.timezone)
         file_path = ""
-        if component is not None:
-            file_path = await component.get_file()
-        if not file_path:
-            if candidate.file_url.startswith(("http://", "https://")):
-                temp_file = File(name=candidate.file_name, url=candidate.file_url)
-            else:
-                temp_file = File(name=candidate.file_name, file=candidate.file_url)
-            file_path = await temp_file.get_file()
+        try:
+            if component is not None:
+                file_path = await component.get_file()
+            if not file_path:
+                if candidate.file_url.startswith(("http://", "https://")):
+                    temp_file = File(name=candidate.file_name, url=candidate.file_url)
+                else:
+                    temp_file = File(name=candidate.file_name, file=candidate.file_url)
+                file_path = await temp_file.get_file()
+        except Exception as exc:
+            logger.exception("课表 ICS 文件下载失败: %s", exc)
+            self._reply_text(event, "ICS 文件下载失败，请稍后重试或重新上传。")
+            return
         if not file_path:
             self._reply_text(event, "没有拿到可下载的 ICS 文件。")
             return
@@ -302,15 +314,20 @@ class ScheduleTrackerPlugin(star.Star):
             self._reply_text(event, "这个 ICS 文件解析失败，请检查文件格式。")
             return
 
-        member = self.storage.bind_schedule(
-            self.groups,
-            group_id=group_id,
-            unified_msg_origin=event.unified_msg_origin,
-            user_id=user_id,
-            display_name=event.get_sender_name() or user_id,
-            source_path=file_path,
-            timezone=self.timezone,
-        )
+        try:
+            member = self.storage.bind_schedule(
+                self.groups,
+                group_id=group_id,
+                unified_msg_origin=event.unified_msg_origin,
+                user_id=user_id,
+                display_name=event.get_sender_name() or user_id,
+                source_path=file_path,
+                timezone=self.timezone,
+            )
+        except OSError as exc:
+            logger.exception("保存课表 ICS 文件失败: %s", exc)
+            self._reply_text(event, "课表保存失败，请稍后再试。")
+            return
         self._reply_text(event, f"{member.display_name} 的课表已绑定，默认公开。")
 
     async def _handle_status(self, event: AstrMessageEvent) -> None:
@@ -324,13 +341,18 @@ class ScheduleTrackerPlugin(star.Star):
         if not schedule:
             self._reply_text(event, "这位群友还没有绑定课表。")
             return
-        if schedule.privacy == PrivacyMode.PRIVATE and target_id != event.get_sender_id():
+        if (
+            schedule.privacy == PrivacyMode.PRIVATE
+            and target_id != event.get_sender_id()
+        ):
             self._reply_text(event, "这位同学设置了私密，不能查询当前状态。")
             return
         now = datetime.now(self.timezone)
         try:
             status = self.service.current_status(schedule, now)
-            await self._reply_html(event, status_html(status, now, avatar_url=self._avatar_url(target_id)))
+            await self._reply_html(
+                event, status_html(status, now, avatar_url=self._avatar_url(target_id))
+            )
         except (CalendarDependencyError, CalendarParseError) as exc:
             self._reply_text(event, str(exc))
 
@@ -349,8 +371,18 @@ class ScheduleTrackerPlugin(star.Star):
             self._reply_text(event, "这位同学没有公开完整课表。")
             return
         try:
-            week_start, occurrences = self.service.week_schedule(member, datetime.now(self.timezone))
-            await self._reply_html(event, week_html(member, week_start, occurrences, avatar_url=self._avatar_url(target_id)))
+            week_start, occurrences = self.service.week_schedule(
+                member, datetime.now(self.timezone)
+            )
+            await self._reply_html(
+                event,
+                week_html(
+                    member,
+                    week_start,
+                    occurrences,
+                    avatar_url=self._avatar_url(target_id),
+                ),
+            )
         except (CalendarDependencyError, CalendarParseError) as exc:
             self._reply_text(event, str(exc))
 
@@ -360,22 +392,31 @@ class ScheduleTrackerPlugin(star.Star):
             "状态可查": PrivacyMode.STATUS_ONLY,
             "私密": PrivacyMode.PRIVATE,
         }
-        mode = next((value for key, value in mapping.items() if text.endswith(key)), None)
+        mode = next(
+            (value for key, value in mapping.items() if text.endswith(key)), None
+        )
         if mode is None:
             self._reply_text(event, "可选：课表隐私 公开 / 状态可查 / 私密")
             return
-        member = self.storage.set_privacy(
-            self.groups,
-            group_id=event.get_group_id(),
-            user_id=event.get_sender_id(),
-            privacy=mode,
-        )
+        try:
+            member = self.storage.set_privacy(
+                self.groups,
+                group_id=event.get_group_id(),
+                user_id=event.get_sender_id(),
+                privacy=mode,
+            )
+        except OSError as exc:
+            logger.exception("保存课表隐私设置失败: %s", exc)
+            self._reply_text(event, "隐私设置保存失败，请稍后再试。")
+            return
         if not member:
             self._reply_text(event, "请先绑定课表。")
             return
         self._reply_text(event, f"已切换为：{privacy_label(mode)}")
 
-    async def _handle_daily_report_setting(self, event: AstrMessageEvent, text: str) -> None:
+    async def _handle_daily_report_setting(
+        self, event: AstrMessageEvent, text: str
+    ) -> None:
         group_id = event.get_group_id()
         if not group_id:
             self._reply_text(event, "课表日报只能在群聊中设置。")
@@ -400,22 +441,32 @@ class ScheduleTrackerPlugin(star.Star):
             self._reply_text(event, "只有本群课表管理员可以修改日报开关。")
             return
         enabled = action == "开启"
-        self.storage.set_daily_report_enabled(
-            self.groups,
-            group_id=group_id,
-            unified_msg_origin=event.unified_msg_origin,
-            enabled=enabled,
-        )
-        self._sync_daily_report_group_config(group_id, enabled)
+        try:
+            self.storage.set_daily_report_enabled(
+                self.groups,
+                group_id=group_id,
+                unified_msg_origin=event.unified_msg_origin,
+                enabled=enabled,
+            )
+            self._sync_daily_report_group_config(group_id, enabled)
+        except OSError as exc:
+            logger.exception("保存课表日报设置失败: %s", exc)
+            self._reply_text(event, "日报设置保存失败，请稍后再试。")
+            return
         state = "开启" if enabled else "关闭"
         self._reply_text(event, f"已{state}本群课表日报。")
 
     async def _handle_delete(self, event: AstrMessageEvent) -> None:
-        member = self.storage.delete_schedule(
-            self.groups,
-            group_id=event.get_group_id(),
-            user_id=event.get_sender_id(),
-        )
+        try:
+            member = self.storage.delete_schedule(
+                self.groups,
+                group_id=event.get_group_id(),
+                user_id=event.get_sender_id(),
+            )
+        except OSError as exc:
+            logger.exception("删除课表绑定失败: %s", exc)
+            self._reply_text(event, "课表删除失败，请稍后再试。")
+            return
         self.recent_files.pop((event.get_group_id(), event.get_sender_id()), None)
         self.pending_binds.pop((event.get_group_id(), event.get_sender_id()), None)
         if not member:
@@ -444,9 +495,13 @@ class ScheduleTrackerPlugin(star.Star):
                 rows = self.service.daily_report(public_group, today)
                 if not rows:
                     continue
-                html = report_html(public_group.group_id, datetime.now(self.timezone), rows)
+                html = report_html(
+                    public_group.group_id, datetime.now(self.timezone), rows
+                )
                 url = await self._render_image(html)
-                await self.context.send_message(public_group.unified_msg_origin, MessageChain().url_image(url))
+                await self.context.send_message(
+                    public_group.unified_msg_origin, MessageChain().url_image(url)
+                )
                 await asyncio.sleep(0.5)
             except Exception as exc:
                 logger.exception("发送课表日报失败 group=%s: %s", group.group_id, exc)

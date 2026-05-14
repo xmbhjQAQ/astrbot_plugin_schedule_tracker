@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from astrbot.api import logger
+
 from .models import GroupState, PrivacyMode, ScheduleMember
 
 
@@ -21,22 +23,48 @@ class ScheduleStorage:
     def load_groups(self) -> dict[str, GroupState]:
         if not self.state_path.exists():
             return {}
-        with self.state_path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
+        try:
+            with self.state_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("课表状态文件读取失败，将以空状态启动: %s", exc)
+            return {}
         groups: dict[str, GroupState] = {}
-        for group_id, group_raw in raw.get("groups", {}).items():
+        if not isinstance(raw, dict):
+            logger.warning("课表状态文件结构无效，将以空状态启动。")
+            return {}
+        raw_groups = raw.get("groups", {})
+        if not isinstance(raw_groups, dict):
+            logger.warning("课表状态文件 groups 字段无效，将以空状态启动。")
+            return {}
+        for group_id, group_raw in raw_groups.items():
+            if not isinstance(group_raw, dict):
+                logger.warning("跳过无效课表群状态 group=%s。", group_id)
+                continue
             members = {}
-            for user_id, member_raw in group_raw.get("members", {}).items():
-                members[user_id] = ScheduleMember(
-                    group_id=group_id,
-                    user_id=user_id,
-                    display_name=member_raw.get("display_name") or user_id,
-                    privacy=PrivacyMode(
-                        member_raw.get("privacy", PrivacyMode.PUBLIC.value)
-                    ),
-                    ics_path=member_raw["ics_path"],
-                    bound_at=member_raw.get("bound_at", ""),
-                )
+            raw_members = group_raw.get("members", {})
+            if not isinstance(raw_members, dict):
+                raw_members = {}
+            for user_id, member_raw in raw_members.items():
+                try:
+                    members[user_id] = ScheduleMember(
+                        group_id=group_id,
+                        user_id=user_id,
+                        display_name=member_raw.get("display_name") or user_id,
+                        privacy=PrivacyMode(
+                            member_raw.get("privacy", PrivacyMode.PUBLIC.value)
+                        ),
+                        ics_path=member_raw["ics_path"],
+                        bound_at=member_raw.get("bound_at", ""),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    # 一个成员的历史数据损坏不应阻止整个插件加载。
+                    logger.warning(
+                        "跳过无效课表成员状态 group=%s user=%s: %s",
+                        group_id,
+                        user_id,
+                        exc,
+                    )
             groups[group_id] = GroupState(
                 group_id=group_id,
                 unified_msg_origin=group_raw.get("unified_msg_origin", ""),
@@ -79,7 +107,9 @@ class ScheduleStorage:
     ) -> ScheduleMember:
         group = groups.setdefault(
             group_id,
-            GroupState(group_id=group_id, unified_msg_origin=unified_msg_origin, members={}),
+            GroupState(
+                group_id=group_id, unified_msg_origin=unified_msg_origin, members={}
+            ),
         )
         group.unified_msg_origin = unified_msg_origin
 
@@ -92,7 +122,8 @@ class ScheduleStorage:
         member = ScheduleMember(
             group_id=group_id,
             user_id=user_id,
-            display_name=display_name or (previous.display_name if previous else user_id),
+            display_name=display_name
+            or (previous.display_name if previous else user_id),
             privacy=previous.privacy if previous else PrivacyMode.PUBLIC,
             ics_path=str(target_path),
             bound_at=datetime.now(timezone).isoformat(),
@@ -111,7 +142,9 @@ class ScheduleStorage:
     ) -> GroupState:
         group = groups.setdefault(
             group_id,
-            GroupState(group_id=group_id, unified_msg_origin=unified_msg_origin, members={}),
+            GroupState(
+                group_id=group_id, unified_msg_origin=unified_msg_origin, members={}
+            ),
         )
         group.unified_msg_origin = unified_msg_origin
         group.daily_report_enabled = enabled

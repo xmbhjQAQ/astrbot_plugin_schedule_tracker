@@ -3,8 +3,17 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from astrbot.api import logger
+
+from .ics_parser import CalendarDependencyError, CalendarParseError
 from .ics_parser import IcsScheduleParser
-from .models import ClassOccurrence, CurrentStatus, DailyReportRow, GroupState, ScheduleMember
+from .models import (
+    ClassOccurrence,
+    CurrentStatus,
+    DailyReportRow,
+    GroupState,
+    ScheduleMember,
+)
 
 
 def day_bounds(day: date, timezone: ZoneInfo) -> tuple[datetime, datetime]:
@@ -58,7 +67,19 @@ class ScheduleService:
         start, end = day_bounds(day, self.timezone)
         rows: list[DailyReportRow] = []
         for member in group.members.values():
-            occurrences = self.parser.occurrences_between(member.ics_path, start, end)
+            try:
+                occurrences = self.parser.occurrences_between(
+                    member.ics_path, start, end
+                )
+            except (CalendarDependencyError, CalendarParseError, OSError) as exc:
+                # 日报是批处理任务，单个成员的课表损坏时跳过该成员。
+                logger.warning(
+                    "跳过无法读取的课表日报成员 group=%s user=%s: %s",
+                    group.group_id,
+                    member.user_id,
+                    exc,
+                )
+                continue
             minutes = merged_minutes(occurrences)
             if minutes > 0:
                 rows.append(

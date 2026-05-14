@@ -4,7 +4,13 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from html import escape
 
-from .models import ClassOccurrence, CurrentStatus, DailyReportRow, PrivacyMode, ScheduleMember
+from .models import (
+    ClassOccurrence,
+    CurrentStatus,
+    DailyReportRow,
+    PrivacyMode,
+    ScheduleMember,
+)
 
 
 DAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -380,7 +386,9 @@ def _qq_avatar_url(user_id: str) -> str:
     return f"https://q1.qlogo.cn/g?b=qq&nk={_html(user_id)}&s=100"
 
 
-def _avatar(member: ScheduleMember, avatar_url: str | None = None, small: bool = False) -> str:
+def _avatar(
+    member: ScheduleMember, avatar_url: str | None = None, small: bool = False
+) -> str:
     url = avatar_url or _qq_avatar_url(member.user_id)
     size_class = " small" if small else ""
     return (
@@ -393,7 +401,7 @@ def _frame(width: int, height: int, body: str) -> str:
     return (
         f'{STYLE}<div class="render-frame" data-render-width="{width}" '
         f'data-render-height="{height}" style="width:{width}px;min-height:{height}px">'
-        f'{body}</div>'
+        f"{body}</div>"
     )
 
 
@@ -469,8 +477,7 @@ def _time_label(minute: int) -> str:
 
 def _course_time_slots(occurrences: list[ClassOccurrence]) -> list[tuple[int, int]]:
     slots = {
-        (_minute_of_day(item.start), _minute_of_day(item.end))
-        for item in occurrences
+        (_minute_of_day(item.start), _minute_of_day(item.end)) for item in occurrences
     }
     if not slots:
         return [(8 * 60, 18 * 60)]
@@ -505,7 +512,9 @@ def _slot_heights(
             for item in items
             if (_minute_of_day(item.start), _minute_of_day(item.end)) == slot
         ]
-        content_height = max((_course_card_height(item) + 16 for item in slot_items), default=0)
+        content_height = max(
+            (_course_card_height(item) + 16 for item in slot_items), default=0
+        )
         heights.append(max(MIN_TIME_SLOT_ROW_HEIGHT, content_height))
     return heights
 
@@ -535,7 +544,9 @@ def week_html(
     slot_heights = _slot_heights(slots, items_by_day)
     grid_height = sum(slot_heights)
     height = 190 + 54 + grid_height
-    row_template = "54px " + " ".join(f"{slot_height}px" for slot_height in slot_heights)
+    row_template = "54px " + " ".join(
+        f"{slot_height}px" for slot_height in slot_heights
+    )
 
     heads = ['<div class="corner"></div>']
     for offset in range(7):
@@ -555,9 +566,19 @@ def week_html(
         rows.append(_slot_label(slot_offset, start_minute, end_minute))
         for day_index in range(7):
             cards = []
-            for item_index, item in enumerate(items_by_slot_day.get((slot_offset, day_index), [])):
-                location = f'<div class="week-course-meta">{_html(item.location)}</div>' if item.location else ""
-                variant = f" variant-{(slot_offset + item_index) % 3}" if (slot_offset + item_index) % 3 else ""
+            for item_index, item in enumerate(
+                items_by_slot_day.get((slot_offset, day_index), [])
+            ):
+                location = (
+                    f'<div class="week-course-meta">{_html(item.location)}</div>'
+                    if item.location
+                    else ""
+                )
+                variant = (
+                    f" variant-{(slot_offset + item_index) % 3}"
+                    if (slot_offset + item_index) % 3
+                    else ""
+                )
                 cards.append(
                     f'<div class="week-course{variant}">'
                     f'<div class="week-course-time">{_fmt_range(item)}</div>'
@@ -566,7 +587,7 @@ def week_html(
             rows.append(f'<div class="day-cell">{"".join(cards)}</div>')
 
     body = f"""<div class="surface">
-{_header(f"{member.display_name} 的本周课表", f'{week_start.strftime("%Y-%m-%d")} 起 · {len(occurrences)} 节课', "周视图", member, avatar_url)}
+{_header(f"{member.display_name} 的本周课表", f"{week_start.strftime('%Y-%m-%d')} 起 · {len(occurrences)} 节课", "周视图", member, avatar_url)}
   <div class="week-shell">
     <div class="week-grid" style="grid-template-rows:{row_template}">{"".join(heads)}{"".join(rows)}</div>
   </div>
@@ -581,7 +602,7 @@ def report_html(group_name: str, day: datetime, rows: list[DailyReportRow]) -> s
             hours = row.minutes / 60
             row_html.append(
                 f'<div class="row"><div class="row-left"><div class="rank">#{idx}</div>'
-                f'{_avatar(row.member, small=True)}'
+                f"{_avatar(row.member, small=True)}"
                 f'<div><div class="member-name">{_html(row.member.display_name)}</div>'
                 f'<div class="muted">{row.class_count} 节课 · {row.minutes} 分钟</div></div></div>'
                 f'<div class="hours">{hours:.1f} h</div></div>'
@@ -591,7 +612,7 @@ def report_html(group_name: str, day: datetime, rows: list[DailyReportRow]) -> s
         content = '<div class="hero"><div class="status">今天大家都没有课</div><div class="empty">没有可展示的课时排行。</div></div>'
     height = 170 + max(1, len(rows)) * 78
     body = f"""<div class="surface">
-{_header("本群今日课时小结", f'{day.strftime("%Y-%m-%d")} · 仅统计非私密且当天有课的成员', "日报")}
+{_header("本群今日课时小结", f"{day.strftime('%Y-%m-%d')} · 仅统计非私密且当天有课的成员", "日报")}
   {content}
 </div>"""
     return _frame(REPORT_WIDTH, height, body)
