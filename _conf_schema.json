@@ -11,6 +11,12 @@
     "default": "22:30",
     "hint": "24 小时制 HH:MM，例如 22:30"
   },
+  "how_to_add_schedule_reply": {
+    "description": "“如何添加课表”命令回复内容",
+    "type": "text",
+    "default": "请先在群里发送“绑定课表”，然后在 10 分钟内上传或转发自己的 .ics 日历文件。绑定成功后，可以使用“在上课吗 @某人”查询当前状态，使用“看看课表 @某人”查看本周课表。",
+    "hint": "群成员发送“如何添加课表”时，机器人回复这段文本"
+  },
   "daily_report_enabled_groups": {
     "description": "开启日报的群号列表",
     "type": "list",

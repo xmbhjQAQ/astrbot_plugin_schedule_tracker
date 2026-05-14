@@ -91,6 +91,8 @@ class ScheduleTrackerPlugin(star.Star):
         text = event.message_str.strip()
         if text == "绑定课表":
             await self._handle_bind(event)
+        elif text == "如何添加课表":
+            self._handle_how_to_add_schedule(event)
         elif text.startswith("在上课吗"):
             await self._handle_status(event)
         elif text.startswith("看看课表"):
@@ -247,6 +249,15 @@ class ScheduleTrackerPlugin(star.Star):
         event.set_result(
             MessageEventResult().message(text).use_t2i(False).stop_event()
         )
+
+    def _handle_how_to_add_schedule(self, event: AstrMessageEvent) -> None:
+        reply = str(
+            self.config.get(
+                "how_to_add_schedule_reply",
+                "请发送“绑定课表”，然后在 10 分钟内上传或转发自己的 .ics 日历文件。",
+            )
+        ).strip()
+        self._reply_text(event, reply or "请发送“绑定课表”，然后上传或转发自己的 .ics 日历文件。")
 
     async def _handle_bind(self, event: AstrMessageEvent) -> None:
         group_id = event.get_group_id()

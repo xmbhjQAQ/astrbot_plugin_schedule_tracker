@@ -5,6 +5,7 @@ AstrBot 插件：通过用户上传的 `.ics` 日历文件绑定 QQ 群友课表
 ## 指令
 
 * `绑定课表`：绑定发送者 10 分钟内上传/转发的 `.ics` 文件。
+* `如何添加课表`：查看绑定课表的说明文本，回复内容可在 WebUI 配置。
 * `在上课吗 @某人`：查询群友当前上课状态。
 * `看看课表 @某人`：查看群友本周课表。
 * `课表隐私 公开`：公开当前状态和完整课表。
@@ -21,6 +22,7 @@ AstrBot 插件：通过用户上传的 `.ics` 日历文件绑定 QQ 群友课表
 
 * `timezone`：默认 `Asia/Shanghai`
 * `daily_report_time`：默认 `22:30`
+* `how_to_add_schedule_reply`：`如何添加课表` 命令的回复文本
 * `daily_report_enabled_groups`：在 WebUI 中预先开启日报的群号列表
 * `group_admins`：在 WebUI 中配置群课表管理员，填写 JSON 文本，格式为“群号 -> 管理员 QQ 号列表”
 
