@@ -22,7 +22,7 @@ AstrBot 插件：通过用户上传的 `.ics` 日历文件绑定 QQ 群友课表
 * `timezone`：默认 `Asia/Shanghai`
 * `daily_report_time`：默认 `22:30`
 * `daily_report_enabled_groups`：在 WebUI 中预先开启日报的群号列表
-* `group_admins`：在 WebUI 中配置群课表管理员，格式为“群号 -> 管理员 QQ 号列表”
+* `group_admins`：在 WebUI 中配置群课表管理员，填写 JSON 文本，格式为“群号 -> 管理员 QQ 号列表”
 
 ## 依赖
 

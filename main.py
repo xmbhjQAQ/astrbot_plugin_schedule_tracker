@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -154,6 +155,12 @@ class ScheduleTrackerPlugin(star.Star):
 
     def _configured_group_admins(self, group_id: str) -> set[str]:
         raw = self.config.get("group_admins", {})
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                logger.warning("课表插件 group_admins 配置不是有效 JSON。")
+                return set()
         if not isinstance(raw, dict):
             return set()
         value = raw.get(group_id) or raw.get(str(group_id))
