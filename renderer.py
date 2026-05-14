@@ -206,6 +206,9 @@ body {
   color: #7b8796;
 }
 .day-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   min-width: 0;
   min-height: 0;
   padding: 8px 10px;
@@ -242,12 +245,17 @@ body {
   color: #7d8795;
 }
 .week-course {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: center;
   width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   padding: 8px 9px;
   border-radius: 13px;
-  overflow: visible;
+  overflow: hidden;
   background: linear-gradient(145deg, #eaf3ff, #ffffff);
   border: 1px solid #cbdcf1;
   border-left: 5px solid #4f83c4;
@@ -264,18 +272,37 @@ body {
   border-left-color: #d28b43;
 }
 .week-course-title {
+  min-width: 0;
   font-size: 13px;
   line-height: 1.25;
   font-weight: 900;
   color: #203049;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.week-course-time {
+  flex: 0 0 auto;
+  margin-bottom: 4px;
+  color: #4d5e75;
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 800;
+  white-space: nowrap;
 }
 .week-course-meta {
+  min-width: 0;
   margin-top: 4px;
   color: #5f6f82;
   font-size: 11px;
   line-height: 1.25;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .report-list {
   display: grid;
@@ -460,8 +487,8 @@ def _estimated_text_lines(text: str, chars_per_line: int) -> int:
 
 
 def _course_card_height(item: ClassOccurrence) -> int:
-    title_lines = _estimated_text_lines(item.title, 8)
-    location_lines = _estimated_text_lines(item.location, 10)
+    title_lines = min(3, _estimated_text_lines(item.title, 8))
+    location_lines = min(2, _estimated_text_lines(item.location, 10))
     meta_lines = 1 + location_lines
     return 28 + title_lines * 20 + meta_lines * 18 + 20
 
@@ -533,8 +560,8 @@ def week_html(
                 variant = f" variant-{(slot_offset + item_index) % 3}" if (slot_offset + item_index) % 3 else ""
                 cards.append(
                     f'<div class="week-course{variant}">'
-                    f'<div class="week-course-title">{_html(item.title)}</div>'
-                    f'<div class="week-course-meta">{_fmt_range(item)}</div>{location}</div>'
+                    f'<div class="week-course-time">{_fmt_range(item)}</div>'
+                    f'<div class="week-course-title">{_html(item.title)}</div>{location}</div>'
                 )
             rows.append(f'<div class="day-cell">{"".join(cards)}</div>')
 
