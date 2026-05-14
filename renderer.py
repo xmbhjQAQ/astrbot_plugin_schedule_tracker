@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta
 from html import escape
-from math import ceil, floor
 
 from .models import ClassOccurrence, CurrentStatus, DailyReportRow, PrivacyMode, ScheduleMember
 
@@ -12,7 +11,7 @@ DAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 STATUS_WIDTH = 760
 WEEK_WIDTH = 1120
 REPORT_WIDTH = 820
-MIN_GRID_MINUTES = 180
+MIN_TIME_SLOT_ROW_HEIGHT = 92
 
 
 STYLE = """
@@ -175,7 +174,7 @@ body {
 }
 .week-grid {
   display: grid;
-  grid-template-columns: 72px repeat(7, 1fr);
+  grid-template-columns: 86px repeat(7, 1fr);
   width: 100%;
 }
 .corner,
@@ -206,70 +205,60 @@ body {
   font-size: 12px;
   color: #7b8796;
 }
-.time-axis,
-.day-column {
-  position: relative;
-  min-height: var(--grid-height);
-}
-.time-axis {
-  background: #f8fafc;
-  border-right: 1px solid #d8e3ee;
-}
-.day-column {
+.day-cell {
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 10px;
   background: #ffffff;
   border-right: 1px solid #e0e8f1;
+  border-bottom: 1px solid #eef3f8;
 }
-.day-column:last-child {
+.day-cell:nth-child(8n) {
   border-right: 0;
 }
-.grid-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: #eef3f8;
-  pointer-events: none;
+.slot-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  background: #f8fafc;
+  color: #6d7889;
+  border-right: 1px solid #d8e3ee;
+  border-bottom: 1px solid #dfe7f0;
 }
-.grid-line.course-boundary {
-  left: 10px;
-  right: 10px;
-  background: rgba(79, 131, 196, 0.16);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.78);
-}
-.time-axis .grid-line {
-  background: #dfe7f0;
-}
-.time-label {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  transform: translateY(-50%);
-  color: #718094;
-  font-size: 12px;
-  font-weight: 800;
+.slot-no {
+  color: #111827;
+  font-size: 23px;
   line-height: 1;
-  text-align: right;
-  white-space: nowrap;
+  font-weight: 800;
+}
+.slot-time {
+  font-size: 12px;
+  line-height: 1.12;
+  font-weight: 700;
+  color: #7d8795;
 }
 .week-course {
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  min-height: 28px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
   padding: 8px 9px;
   border-radius: 13px;
-  overflow: hidden;
+  overflow: visible;
   background: linear-gradient(145deg, #eaf3ff, #ffffff);
   border: 1px solid #cbdcf1;
   border-left: 5px solid #4f83c4;
   box-shadow: 0 8px 18px rgba(49, 93, 145, 0.12);
 }
-.week-course:nth-child(3n + 1) {
+.week-course.variant-1 {
   background: linear-gradient(145deg, #ecf8f2, #ffffff);
   border-color: #c9e6d7;
   border-left-color: #39a071;
 }
-.week-course:nth-child(3n + 2) {
+.week-course.variant-2 {
   background: linear-gradient(145deg, #fff5e8, #ffffff);
   border-color: #ead9bf;
   border-left-color: #d28b43;
@@ -446,42 +435,61 @@ def _minute_of_day(dt: datetime) -> int:
     return dt.hour * 60 + dt.minute
 
 
-def _time_bounds(occurrences: list[ClassOccurrence]) -> tuple[int, int]:
-    if not occurrences:
-        return 8 * 60, 18 * 60
-    starts = [_minute_of_day(item.start) for item in occurrences]
-    ends = [_minute_of_day(item.end) for item in occurrences]
-    start = max(0, floor((min(starts) - 20) / 30) * 30)
-    end = min(24 * 60, ceil((max(ends) + 20) / 30) * 30)
-    if end - start < MIN_GRID_MINUTES:
-        extra = MIN_GRID_MINUTES - (end - start)
-        start = max(0, start - extra // 2)
-        end = min(24 * 60, start + MIN_GRID_MINUTES)
-    return start, end
-
-
 def _time_label(minute: int) -> str:
     hour, mins = divmod(minute, 60)
     return f"{hour:02d}:{mins:02d}"
 
 
-def _grid_top(minute: int, start_minute: int, total_minutes: int, grid_height: int) -> float:
-    return (minute - start_minute) / total_minutes * grid_height
+def _course_time_slots(occurrences: list[ClassOccurrence]) -> list[tuple[int, int]]:
+    slots = {
+        (_minute_of_day(item.start), _minute_of_day(item.end))
+        for item in occurrences
+    }
+    if not slots:
+        return [(8 * 60, 18 * 60)]
+    return sorted(slots, key=lambda slot: (slot[0], slot[1]))
 
 
-def _grid_lines(
-    minutes: list[int],
-    boundary_minutes: set[int],
-    start_minute: int,
-    total_minutes: int,
-    grid_height: int,
-) -> str:
-    lines = []
-    for minute in minutes:
-        line_class = "grid-line course-boundary" if minute in boundary_minutes else "grid-line"
-        top = _grid_top(minute, start_minute, total_minutes, grid_height)
-        lines.append(f'<div class="{line_class}" style="top:{top:.2f}px"></div>')
-    return "".join(lines)
+def _estimated_text_lines(text: str, chars_per_line: int) -> int:
+    if not text:
+        return 0
+    lines = 0
+    for segment in str(text).splitlines() or [""]:
+        lines += max(1, (len(segment) + chars_per_line - 1) // chars_per_line)
+    return lines
+
+
+def _course_card_height(item: ClassOccurrence) -> int:
+    title_lines = _estimated_text_lines(item.title, 8)
+    location_lines = _estimated_text_lines(item.location, 10)
+    meta_lines = 1 + location_lines
+    return 28 + title_lines * 20 + meta_lines * 18 + 20
+
+
+def _slot_heights(
+    slots: list[tuple[int, int]],
+    items_by_day: dict[int, list[ClassOccurrence]],
+) -> list[int]:
+    heights = []
+    for slot in slots:
+        slot_items = [
+            item
+            for items in items_by_day.values()
+            for item in items
+            if (_minute_of_day(item.start), _minute_of_day(item.end)) == slot
+        ]
+        content_height = max((_course_card_height(item) + 16 for item in slot_items), default=0)
+        heights.append(max(MIN_TIME_SLOT_ROW_HEIGHT, content_height))
+    return heights
+
+
+def _slot_label(index: int, start_minute: int, end_minute: int) -> str:
+    return (
+        '<div class="slot-label">'
+        f'<div class="slot-no">{index + 1}</div>'
+        f'<div class="slot-time">{_time_label(start_minute)}</div>'
+        f'<div class="slot-time">{_time_label(end_minute)}</div></div>'
+    )
 
 
 def week_html(
@@ -490,68 +498,50 @@ def week_html(
     occurrences: list[ClassOccurrence],
     avatar_url: str | None = None,
 ) -> str:
-    start_minute, end_minute = _time_bounds(occurrences)
-    total_minutes = max(MIN_GRID_MINUTES, end_minute - start_minute)
-    grid_height = max(360, total_minutes)
-    height = 190 + 54 + grid_height
+    slots = _course_time_slots(occurrences)
+    slot_index = {slot: index for index, slot in enumerate(slots)}
     items_by_day: dict[int, list[ClassOccurrence]] = defaultdict(list)
     for item in sorted(occurrences, key=lambda occ: (occ.start, occ.end)):
         day_index = (item.start.date() - week_start.date()).days
         if 0 <= day_index <= 6:
             items_by_day[day_index].append(item)
+    slot_heights = _slot_heights(slots, items_by_day)
+    grid_height = sum(slot_heights)
+    height = 190 + 54 + grid_height
+    row_template = "54px " + " ".join(f"{slot_height}px" for slot_height in slot_heights)
 
     heads = ['<div class="corner"></div>']
-    columns = [
-        f'<div class="time-axis" style="--grid-height:{grid_height}px">'
-    ]
-    label_step = 60 if total_minutes <= 720 else 120
-    first_label = ceil(start_minute / label_step) * label_step
-    hour_label_minutes = list(range(first_label, end_minute + 1, label_step))
-    base_line_minutes = sorted(set(hour_label_minutes) | {start_minute, end_minute})
-    columns.append(_grid_lines(base_line_minutes, set(), start_minute, total_minutes, grid_height))
-    for minute in hour_label_minutes:
-        top = _grid_top(minute, start_minute, total_minutes, grid_height)
-        columns.append(
-            f'<div class="time-label" style="top:{top:.2f}px">{_time_label(minute)}</div>'
-        )
-    columns.append("</div>")
-
     for offset in range(7):
         day = week_start + timedelta(days=offset)
         heads.append(
             f'<div class="day-head"><div class="day-name">{DAYS[offset]}</div>'
             f'<div class="day-date">{day.strftime("%m-%d")}</div></div>'
         )
-        courses = []
-        boundary_minutes: set[int] = set()
-        for item in items_by_day.get(offset, []):
-            item_start = max(start_minute, _minute_of_day(item.start))
-            item_end = min(end_minute, _minute_of_day(item.end))
-            if start_minute <= item_start <= end_minute:
-                boundary_minutes.add(item_start)
-            if start_minute <= item_end <= end_minute:
-                boundary_minutes.add(item_end)
-            top = _grid_top(item_start, start_minute, total_minutes, grid_height)
-            course_height = max(30, (item_end - item_start) / total_minutes * grid_height)
-            location = f'<div class="week-course-meta">{_html(item.location)}</div>' if item.location else ""
-            courses.append(
-                f'<div class="week-course" style="top:{top:.2f}px;height:{course_height:.2f}px">'
-                f'<div class="week-course-title">{_html(item.title)}</div>'
-                f'<div class="week-course-meta">{_fmt_range(item)}</div>{location}</div>'
-            )
-        if not courses:
-            courses.append('<div class="empty" style="margin:12px">没课</div>')
-        line_minutes = sorted(set(base_line_minutes) | boundary_minutes)
-        columns.append(
-            f'<div class="day-column" style="--grid-height:{grid_height}px">'
-            f'{_grid_lines(line_minutes, boundary_minutes, start_minute, total_minutes, grid_height)}'
-            f'{"".join(courses)}</div>'
-        )
+
+    rows = []
+    items_by_slot_day: dict[tuple[int, int], list[ClassOccurrence]] = defaultdict(list)
+    for day_index, items in items_by_day.items():
+        for item in items:
+            slot = (_minute_of_day(item.start), _minute_of_day(item.end))
+            items_by_slot_day[(slot_index[slot], day_index)].append(item)
+    for slot_offset, (start_minute, end_minute) in enumerate(slots):
+        rows.append(_slot_label(slot_offset, start_minute, end_minute))
+        for day_index in range(7):
+            cards = []
+            for item_index, item in enumerate(items_by_slot_day.get((slot_offset, day_index), [])):
+                location = f'<div class="week-course-meta">{_html(item.location)}</div>' if item.location else ""
+                variant = f" variant-{(slot_offset + item_index) % 3}" if (slot_offset + item_index) % 3 else ""
+                cards.append(
+                    f'<div class="week-course{variant}">'
+                    f'<div class="week-course-title">{_html(item.title)}</div>'
+                    f'<div class="week-course-meta">{_fmt_range(item)}</div>{location}</div>'
+                )
+            rows.append(f'<div class="day-cell">{"".join(cards)}</div>')
 
     body = f"""<div class="surface">
 {_header(f"{member.display_name} 的本周课表", f'{week_start.strftime("%Y-%m-%d")} 起 · {len(occurrences)} 节课', "周视图", member, avatar_url)}
   <div class="week-shell">
-    <div class="week-grid">{"".join(heads)}{"".join(columns)}</div>
+    <div class="week-grid" style="grid-template-rows:{row_template}">{"".join(heads)}{"".join(rows)}</div>
   </div>
 </div>"""
     return _frame(WEEK_WIDTH, height, body)
